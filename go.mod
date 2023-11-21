@@ -3,8 +3,10 @@ module sharedgpu
 go 1.21.3
 
 require (
+	fyne.io/fyne v1.4.3
 	fyne.io/fyne/v2 v2.4.1
 	github.com/flopp/go-findfont v0.1.0
+	golang.org/x/crypto v0.12.0
 )
 
 require (
