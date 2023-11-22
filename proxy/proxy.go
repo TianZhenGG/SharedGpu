@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 
 	gssh "github.com/gliderlabs/ssh"
@@ -82,41 +81,7 @@ func disableStrictHostKeyChecking() error {
 
 // proxy 内网穿透，端口转发
 func main() {
-
-	go func() {
-		for {
-			startSShServer()
-		}
-	}()
-	// 启动frpc客户端
-	startFRPClient()
+	startSShServer()
 }
 
-// startFRPClient 启动frpc客户端
-func startFRPClient() {
-	// 获取当前文件的路径
-	dir, err := filepath.Abs(filepath.Dir(os.Args[0]))
-	if err != nil {
-		log.Fatal(err)
-	}
 
-	// 配置文件的路径
-	configPath := filepath.Join(dir, "frpc.toml")
-
-	// 启动frpc客户端
-	for {
-		cmd := exec.Command("./frpc", "-c", configPath)
-		err = cmd.Start()
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		log.Printf("frpc started with pid %d\n", cmd.Process.Pid)
-
-		// 等待frpc客户端退出
-		err = cmd.Wait()
-		if err != nil {
-			log.Printf("frpc exited with error: %v\n", err)
-		}
-	}
-}
