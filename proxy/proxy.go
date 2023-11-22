@@ -3,9 +3,9 @@ package main
 import (
 	"io"
 	"log"
-	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 
 	gssh "github.com/gliderlabs/ssh"
@@ -88,26 +88,35 @@ func main() {
 			startSShServer()
 		}
 	}()
-	// 启动FRP客户端，将公网服务器的8080端口的流量转发到内网的3333端口
-	startFRPClient("47.96.225.81:8080", "localhost:3333")
+	// 启动frpc客户端
+	startFRPClient()
 }
 
-func startFRPClient(source, target string) {
+// startFRPClient 启动frpc客户端
+func startFRPClient() {
+	// 获取当前文件的路径
+	dir, err := filepath.Abs(filepath.Dir(os.Args[0]))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// 配置文件的路径
+	configPath := filepath.Join(dir, "frpc.toml")
+
+	// 启动frpc客户端
 	for {
-		// 连接到公网服务器
-		remoteConn, err := net.Dial("tcp", source)
+		cmd := exec.Command("./frpc", "-c", configPath)
+		err = cmd.Start()
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		// 连接到内网的3333端口
-		localConn, err := net.Dial("tcp", target)
-		if err != nil {
-			log.Fatal(err)
-		}
+		log.Printf("frpc started with pid %d\n", cmd.Process.Pid)
 
-		// 将数据在这两个连接之间转发
-		go io.Copy(remoteConn, localConn)
-		io.Copy(localConn, remoteConn)
+		// 等待frpc客户端退出
+		err = cmd.Wait()
+		if err != nil {
+			log.Printf("frpc exited with error: %v\n", err)
+		}
 	}
 }
