@@ -3,7 +3,7 @@ import requests
 # https://openai-proxy-api.pages.dev/api
 # https://openai.451024.xyz
 # https://openai-proxy-api.pages.dev/api
-
+    
 class chat_bot():
     def __init__(self):
         self.url = "https://openai-proxy-api.pages.dev/api/v1/chat/completions"
