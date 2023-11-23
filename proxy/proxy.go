@@ -1,8 +1,8 @@
-package main
+package proxy
 
 import (
+	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"runtime"
@@ -10,29 +10,53 @@ import (
 	gssh "github.com/gliderlabs/ssh"
 )
 
-func startSShServer() {
-
-	// Disable StrictHostKeyChecking
-	err := disableStrictHostKeyChecking()
+func main() {
+	errChan := StartSShServer()
+	err := <-errChan
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println(err)
+	} else {
+		fmt.Println("success")
 	}
-	server := &gssh.Server{
-		Addr: ":3333",
-		PasswordHandler: func(ctx gssh.Context, password string) bool {
-			return ctx.User() == "tian"
-		},
-		Handler: func(s gssh.Session) {
-			_, winCh, isPty := s.Pty()
-			if isPty {
-				handlePty(s, winCh)
-			} else {
-				io.WriteString(s, "non-interactive sessions aren't supported\n")
-			}
-		},
-	}
+}
 
-	log.Fatal(server.ListenAndServe())
+func StartSShServer() chan error {
+	result := make(chan error)
+
+	go func() {
+		// Disable StrictHostKeyChecking
+		err := disableStrictHostKeyChecking()
+		if err != nil {
+			result <- fmt.Errorf("failed to disable StrictHostKeyChecking: %w", err)
+			return
+		}
+
+		server := &gssh.Server{
+			Addr: ":3333",
+			PasswordHandler: func(ctx gssh.Context, password string) bool {
+				return ctx.User() == "tian"
+			},
+			Handler: func(s gssh.Session) {
+				_, winCh, isPty := s.Pty()
+				if isPty {
+					handlePty(s, winCh)
+				}
+			},
+		}
+
+		// If the server started successfully, send nil
+		result <- nil
+
+		// Start the server in a new goroutine
+		go func() {
+			err = server.ListenAndServe()
+			if err != nil {
+				fmt.Println(fmt.Errorf("failed to start server: %w", err))
+			}
+		}()
+	}()
+
+	return result
 }
 
 func handlePty(s gssh.Session, winCh <-chan gssh.Window) {
@@ -78,10 +102,3 @@ func disableStrictHostKeyChecking() error {
 	return nil
 
 }
-
-// proxy 内网穿透，端口转发
-func main() {
-	startSShServer()
-}
-
-
