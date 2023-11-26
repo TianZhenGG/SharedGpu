@@ -3,6 +3,7 @@ package proxy
 import (
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"runtime"
@@ -10,22 +11,21 @@ import (
 	gssh "github.com/gliderlabs/ssh"
 )
 
-func main() {
-	errChan := StartSShServer()
-	err := <-errChan
-	if err != nil {
-		fmt.Println(err)
-	} else {
-		fmt.Println("success")
-	}
-}
-
 func StartSShServer() chan error {
 	result := make(chan error)
 
 	go func() {
+		// 检查端口是否被占用
+		listener, err := net.Listen("tcp", ":3333")
+		if err != nil {
+			result <- fmt.Errorf("port 3333 is already in use: %w", err)
+			return
+		}
+		// 关闭监听器，因为我们只是想检查端口是否被占用
+		listener.Close()
+
 		// Disable StrictHostKeyChecking
-		err := disableStrictHostKeyChecking()
+		err = disableStrictHostKeyChecking()
 		if err != nil {
 			result <- fmt.Errorf("failed to disable StrictHostKeyChecking: %w", err)
 			return
@@ -44,16 +44,12 @@ func StartSShServer() chan error {
 			},
 		}
 
-		// If the server started successfully, send nil
-		result <- nil
-
-		// Start the server in a new goroutine
-		go func() {
-			err = server.ListenAndServe()
-			if err != nil {
-				fmt.Println(fmt.Errorf("failed to start server: %w", err))
-			}
-		}()
+		// 启动 SSH 服务器
+		err = server.ListenAndServe()
+		if err != nil {
+			result <- fmt.Errorf("failed to start server: %w", err)
+			return
+		}
 	}()
 
 	return result

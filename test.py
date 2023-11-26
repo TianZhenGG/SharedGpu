@@ -34,6 +34,6 @@ class chat_bot():
 
 send = chat_bot()
 while True:
-    content = "抗击疫情和脱贫攻坚，我们国家是如何体现调动一切积极因素为社会主义事业服务的"
+    content = "111"
     print(send.chat(content))
 

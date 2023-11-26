@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"sharedgpu/db"
 	"sharedgpu/proxy"
+	"sharedgpu/utils"
 	"strings"
 	"time"
 
@@ -18,10 +21,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"github.com/flopp/go-findfont"
-	"github.com/shirou/gopsutil/cpu"
-	"github.com/shirou/gopsutil/disk"
-	"github.com/shirou/gopsutil/mem"
-	"github.com/shirou/gopsutil/net"
+	"golang.org/x/crypto/ssh"
 )
 
 // 定义全局变量
@@ -30,14 +30,13 @@ var (
 	globalEditorVim  *widget.Entry
 	globalLeftbottom *fyne.Container
 	globalFilePath   string
+
+	// 定义一个全局的 leftline 变量
+	leftline = widget.NewMultiLineEntry()
 )
 
-// 连接到 Redis
-// client := redis.NewClient(&redis.Options{
-//     Addr:     "localhost:6379",
-//     Password: "", // 如果没有密码，就留空
-//     DB:       0,  // 使用默认的 DB
-// })
+// 定义 displayArea 为全局变量
+var displayArea *widget.Entry
 
 func init() {
 	//设置中文字体:解决中文乱码问题
@@ -47,6 +46,28 @@ func init() {
 			os.Setenv("FYNE_FONT", path)
 			break
 		}
+	}
+}
+
+func handleShortcut(editor *widget.Entry, action string) {
+	switch action {
+	case "save":
+		// 保存文件的代码
+
+	case "undo":
+		// 回退代码的代码
+	case "selectAll":
+		keyEvent := &fyne.KeyEvent{Name: fyne.KeyA}
+		editor.TypedKey(keyEvent)
+		if keyEvent.Name == fyne.KeyA {
+			editor.TypedRune('a')
+		}
+	case "delete":
+		// 删除的代码
+	case "comment":
+		// 批量注释的代码
+	default:
+		fmt.Println("Unknown action:", action)
 	}
 }
 
@@ -74,6 +95,16 @@ func readFile(currentFilePath string, editorVim *widget.Entry, fileButton *LeftA
 		fyne.LogError("无法读取文件", err)
 		return
 	}
+
+	// 计算文件的行数
+	lines := strings.Split(string(content), "\n")
+
+	// 在 leftline 中显示行号
+	lineNumbers := ""
+	for i := 1; i <= len(lines); i++ {
+		lineNumbers += fmt.Sprintf("%d\n", i)
+	}
+	leftline.SetText(lineNumbers)
 
 	// 将文件内容显示在编辑器中
 	editorVim.SetText(string(content))
@@ -116,77 +147,34 @@ func showFolderContents(folderPath string, editorVim *widget.Entry, leftbottom *
 	// 为每个文件或文件夹创建一个按钮
 	for _, f := range files {
 		file := f // 创建一个新的变量来存储当前的文件
-		fileButton := NewLeftAlignedButton(file.Name(), nil)
 
 		// 捕获当前的文件路径
 		currentFilePath := filepath.Join(folderPath, file.Name())
 
-		// 设置点击事件处理函数
-		fileButton.OnTapped = func() {
-			if file.IsDir() {
+		if file.IsDir() {
+			//新按钮跟fileButton不一样
+			folderButton := NewLeftAlignedButton(file.Name(), nil)
+			folderButton.Text = file.Name() + "/"
+			folderButton.OnTapped = func() {
 				// 是文件夹，显示文件夹下的内容
 				showFolderContents(currentFilePath, editorVim, leftbottom)
-			} else {
+			}
+			leftbottom.Add(folderButton)
+		} else {
+			fileButton := NewLeftAlignedButton(file.Name(), nil)
+
+			fileButton.OnTapped = func() {
 				// 是文件，读取并显示文件内容
 				readFile(currentFilePath, editorVim, fileButton)
 			}
+			leftbottom.Add(fileButton)
+
 		}
 
-		// 将按钮添加到 leftbottom 容器
-		leftbottom.Add(fileButton)
 	}
 
 	// 刷新 leftbottom 容器
 	leftbottom.Refresh()
-}
-
-func getSystemUsage() (cpuUsage, memoryUsage, diskUsage, networkUsage string, err error) {
-	cpuPercent, err := cpu.Percent(0, false)
-	if err != nil {
-		return "", "", "", "", err
-	}
-	cpuUsage = fmt.Sprintf("%.2f%%", cpuPercent[0])
-
-	memInfo, err := mem.VirtualMemory()
-	if err != nil {
-		return "", "", "", "", err
-	}
-	memoryUsage = fmt.Sprintf("%.2f%%", memInfo.UsedPercent)
-
-	diskInfo, err := disk.Usage("/")
-	if err != nil {
-		return "", "", "", "", err
-	}
-	diskUsage = fmt.Sprintf("%.2f%%", diskInfo.UsedPercent)
-
-	// 获取初始网络接口信息
-	netIOs1, err := net.IOCounters(true)
-	if err != nil {
-		return "", "", "", "", err
-	}
-
-	// 等待一段时间
-	time.Sleep(1 * time.Second)
-
-	// 获取结束时的网络接口信息
-	netIOs2, err := net.IOCounters(true)
-	if err != nil {
-		return "", "", "", "", err
-	}
-
-	// 计算所有接口的总发送和接收字节数的差值，然后转换为兆字节/秒
-	var totalMBsSent, totalMBsRecv float64
-	for i, netIO := range netIOs1 {
-		totalMBsSent += float64(netIOs2[i].BytesSent-netIO.BytesSent) / 1048576.0
-		totalMBsRecv += float64(netIOs2[i].BytesRecv-netIO.BytesRecv) / 1048576.0
-	}
-
-	// 格式化网络使用情况
-	networkUsage = fmt.Sprintf("Upload: %.2f MB/s, Download: %.2f MB/s", totalMBsSent, totalMBsRecv)
-
-	// 获取 GPU 内存的占用情况可能需要特定的库或 API，这取决于你的环境和需求
-
-	return cpuUsage, memoryUsage, diskUsage, networkUsage, nil
 }
 
 type LeftAlignedButton struct {
@@ -223,6 +211,14 @@ func main() {
 	myWindow := myApp.NewWindow("Client")
 	myWindow.Resize(fyne.NewSize(800, 600))
 
+	// 创建一个 context.Context 对象
+	ctx := context.Background()
+
+	rdb, err := db.InitRedis()
+	if err != nil {
+		fmt.Println("redis init failed")
+		return
+	}
 	// 创建添加和删除机器的按钮，并设置颜色
 	addMachineButton := widget.NewButton("租用机器", func() {
 		// 在这里添加机器的代码
@@ -230,7 +226,7 @@ func main() {
 		form := &widget.Form{}
 
 		// 添加显卡配置的下拉菜单
-		gpuOptions := []string{"GPU1", "GPU2", "GPU3"}
+		gpuOptions := []string{"3060", "RTX 3080 Ti", "3090"}
 		gpuSelect := widget.NewSelect(gpuOptions, func(value string) {
 			// 在这里处理用户选择的显卡配置
 		})
@@ -256,12 +252,66 @@ func main() {
 				return
 			}
 
-			//定义一个"" 的 result
-			result := ""
-			if result == "asda" {
-				dialog.ShowError(fmt.Errorf("failed"), myWindow)
-			} else {
+			// gpuselect值来模糊匹配gpu型号
+			fmt.Println("gpuSelect:", gpuSelect.Selected)
+			// 查询redis下所有value记录并打印出来
+			rAll, err := db.GetAllValues()
+			if err != nil {
+				fmt.Println("failed to get all values:", err)
+			}
+			var result string
+			//for遍历rAll中所有的值，如果包含有3080 Ti字样的，则返回这条记录，没有则返回空
+			for _, v := range rAll {
+				if strings.Contains(v, gpuSelect.Selected) {
+					result = v
+					break
+				}
+			}
+			// 如果result为空，则说明没有匹配到，返回错误信息
+			if result != "" {
+				fmt.Println("匹配到机器:", result)
 				dialog.ShowInformation("租用成功", "租用成功", myWindow)
+
+				// 创建 SSH 客户端配置
+				config := &ssh.ClientConfig{
+					User: "tian",
+					Auth: []ssh.AuthMethod{
+						ssh.Password("tian"),
+					},
+					HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+				}
+
+				// 在 goroutine 外部定义一个变量来存储初次连接成功的时间
+				var startTime time.Time
+
+				go func() {
+					for range time.Tick(time.Second) {
+						client, err := ssh.Dial("tcp", "127.0.0.1:3333", config)
+						if err != nil {
+							displayArea.SetText("连接失败: " + err.Error())
+						} else {
+							// 如果是初次连接成功，获取当前时间
+							if startTime.IsZero() {
+								startTime = time.Now()
+							}
+
+							// 计算时间差
+							duration := time.Since(startTime)
+
+							// 计算天、小时、分钟和秒
+							days := int(duration.Hours()) / 24
+							hours := int(duration.Hours()) % 24
+							minutes := int(duration.Minutes()) % 60
+							seconds := int(duration.Seconds()) % 60
+
+							// 显示连接成功和时间差还有gpu相关信息
+							displayArea.SetText(fmt.Sprintf("连接成功，已连接：%d天%d小时%d分钟%d秒，\nGPU:%s", days, hours, minutes, seconds, result))
+
+							client.Close()
+						}
+					}
+				}()
+
 			}
 
 		}, myWindow)
@@ -272,47 +322,46 @@ func main() {
 
 	// 创建租用机器和管理数据集的按钮，并设置颜色
 	rentMachineButton := widget.NewButton("出租机器", func() {
-		// 创建并显示一个圆形进度条
-		progress := widget.NewProgressBarInfinite()
-		progressDialog := dialog.NewCustom("正在出租机器...", "", progress, myWindow)
-		progressDialog.Show()
+
+		machineModel := "MachineModel123"
+		uuid := utils.GenerateUUID(machineModel)
+		uuidStr := uuid.String()
+
+		// 根据 uuid 查询是否存在
+		exists, err := rdb.Exists(ctx, uuidStr).Result()
+		if err != nil {
+			panic(err)
+		}
+
+		if exists == 1 {
+			// 如果存在，直接返回信息，机器已共享
+			println("Machine is already shared.")
+		} else {
+
+			// 获取机器的 CPU、内存、显卡型号和个数
+			cpuInfo, memoryInfo, gpuInfo, nil := utils.GetSystemInfo()
+			if err != nil {
+				panic(err)
+			}
+
+			fmt.Println("cpuInfo:", cpuInfo, "memoryInfo:", memoryInfo, "gpuInfo:", gpuInfo)
+
+			// 将 uuid 和机器的 CPU、内存、显卡型号存入 redis 想变成json形式
+			err = rdb.HSet(ctx, uuidStr, "cpu", cpuInfo, "memory", memoryInfo, "gpu", gpuInfo).Err()
+			if err != nil {
+				fmt.Println("failed to set info to redis :", err)
+			}
+
+		}
 
 		// 在新的 goroutine 中运行 proxy.StartSShServer()
 		go func() {
 			errChan := proxy.StartSShServer()
-			err := <-errChan
-			progressDialog.Hide()
-			if err != nil {
-				dialog.ShowError(err, myWindow)
-			} else {
-				//打印出租成功2s后关闭
-
-				// 创建一个新的窗口来显示仪表盘
-				dashboardWindow := fyne.CurrentApp().NewWindow("仪表盘")
-				cpuLabel := widget.NewLabel("CPU: ")
-				memoryLabel := widget.NewLabel("内存: ")
-				diskLabel := widget.NewLabel("磁盘: ")
-				networkLabel := widget.NewLabel("网络: ")
-				gpuMemoryLabel := widget.NewLabel("GPU 内存: ")
-				dashboardWindow.SetContent(container.NewVBox(cpuLabel, memoryLabel, diskLabel, networkLabel, gpuMemoryLabel))
-				dashboardWindow.Show()
-
-				// 在新的 goroutine 中定期更新仪表盘
-				go func() {
-					for {
-						// 这里需要你自己的函数来获取 CPU、内存、磁盘、网络和 GPU 内存的占用情况
-						cpu, memory, disk, network, gpuMemory := getSystemUsage()
-						cpuLabel.SetText(fmt.Sprintf("CPU: %s", cpu))
-						memoryLabel.SetText(fmt.Sprintf("内存: %s", memory))
-						diskLabel.SetText(fmt.Sprintf("磁盘: %s", disk))
-						networkLabel.SetText(fmt.Sprintf("网络: %s", network))
-						gpuMemoryLabel.SetText(fmt.Sprintf("GPU 内存: %s", gpuMemory))
-						time.Sleep(time.Second)
-					}
-				}()
-			}
+			_ = <-errChan
+			utils.CreateNewWindow(rdb, uuidStr)
 		}()
 	})
+
 	rentMachineButton.Importance = widget.LowImportance
 	manageDatasetButton := widget.NewButton("数据集", func() {
 		// 在这里管理数据集的代码
@@ -411,16 +460,60 @@ func main() {
 	leftSplit.Add(buttonContainer)
 	// leftSplit里面新建个容器叫做leftbottom
 	leftbottom := container.NewVBox()
+	// 设置文本对齐方式
+	alignment := fyne.TextAlignCenter
 
-	// 创建底部的输出面板，宽度是左侧菜单栏的90%
+	// 创建一个新的文本样式
+	textStyle := fyne.TextStyle{Bold: true, Italic: true}
+
+	// 创建一个新的标签
+	label := widget.NewLabelWithStyle("你的文本", alignment, textStyle)
+
+	// 将标签添加到 leftbottom 容器
+	leftbottom.Add(label)
+	//设置leftbottom的字体大小
+
 	output := widget.NewMultiLineEntry()
-	output.SetPlaceHolder("输出面板")
+	output.SetPlaceHolder("键入命令")
 	output.Wrapping = fyne.TextWrapWord
-	output.Disable()
+	output.Enable()
 
 	// 创建中间的编辑器
 	editorVim := widget.NewMultiLineEntry()
-	editorVim.TextStyle = fyne.TextStyle{Monospace: true, Bold: true, Italic: true}
+	editorVim.SetPlaceHolder("请输入...")
+	editorVim.Wrapping = fyne.TextWrapWord
+
+	// 使用这个函数
+	handleShortcut(editorVim, "save")
+	handleShortcut(editorVim, "undo")
+	handleShortcut(editorVim, "selectAll")
+	handleShortcut(editorVim, "delete")
+	handleShortcut(editorVim, "comment")
+
+	// 创建一个定时器，每隔一段时间就检查 editorVim 的内容
+	ticker := time.NewTicker(time.Millisecond * 500)
+
+	go func() {
+		for range ticker.C {
+			// 获取 editorVim 的内容
+			content := editorVim.Text
+
+			// 计算行数
+			lines := strings.Split(content, "\n")
+
+			// 计算 leftline 的行数
+			leftlineLines := strings.Count(leftline.Text, "\n")
+
+			// 如果行数和 leftline 的行数不同，就更新 leftline
+			if len(lines) != leftlineLines {
+				lineNumbers := ""
+				for i := 1; i <= len(lines); i++ {
+					lineNumbers += fmt.Sprintf("%d\n", i)
+				}
+				leftline.SetText(lineNumbers)
+			}
+		}
+	}()
 	// 创建新的按钮
 	rightButton := widget.NewButton("执行", func() {
 		// 按钮的点击事件处理函数
@@ -433,10 +526,26 @@ func main() {
 
 	newBottom.Offset = 0.9 // 设置 output 和 rightButton 的大小比例为 9:1
 
+	// 和editorVim按1：9的比例合并
+	leftConn := container.NewHSplit(leftline, editorVim)
+	leftConn.Offset = 0.01
 	// 创建一个支持滚动的容器，然后将 editorVim 添加到这个容器中
-	scrollableEditorVim := container.NewHScroll(editorVim)
-	editorVimSplit := container.NewVSplit(
+	scrollableEditorVim := container.NewHScroll(leftConn)
+
+	// 创建新的显示区域
+	displayArea = widget.NewMultiLineEntry()
+	displayArea.SetPlaceHolder("新的显示区域")
+	displayArea.Wrapping = fyne.TextWrapWord
+	displayArea.Disable()
+
+	// 将scrollableEditorVim和displayArea添加到新的HSplit中
+	HSplit := container.NewVSplit(
 		scrollableEditorVim,
+		displayArea,
+	)
+	HSplit.Offset = 0.7 // 设置 scrollableEditorVim 和 displayArea 的大小比例为 9:1
+	editorVimSplit := container.NewVSplit(
+		HSplit,
 		newBottom,
 	)
 	importButton := widget.NewButton("导入代码", func() {
@@ -452,58 +561,14 @@ func main() {
 		localImportButton := widget.NewButton("本地导入", func() {
 			dialog.ShowFolderOpen(func(uri fyne.ListableURI, err error) {
 				if err == nil && uri != nil {
-					// 获取文件夹下的所有文件
-					files, err := uri.List()
-					if err != nil {
-						fyne.LogError("无法获取文件列表", err)
-						return
-					}
 
 					// 更新全局变量为选择的路径
 					globalFolderPath = uri.Path()
 					globalEditorVim = editorVim
 					globalLeftbottom = leftbottom
-					// 清空 leftSplit
-					leftbottom.Objects = nil
 
-					// 将文件名显示在leftSplit中,并且为每个文件名添加一个点击事件，点击不同的文件名时，显示不同的文件内容
-					for _, file := range files {
-						// 捕获当前的文件路径
-						currentFilePath := file.Path()
+					showFolderContents(globalFolderPath, globalEditorVim, globalLeftbottom)
 
-						// 获取文件的信息
-						info, err := os.Stat(currentFilePath)
-						if err != nil {
-							fyne.LogError("无法获取文件信息", err)
-							return
-						}
-
-						// 捕获当前的文件是否是一个目录
-						isDir := info.IsDir()
-
-						if isDir {
-							// 如果是目录，则创建一个新的按钮
-							_ = NewLeftAlignedButton(file.Name(), func() {
-
-							})
-						}
-
-						// 在这里定义和初始化 fileButton
-						fileButton := NewLeftAlignedButton(file.Name(), nil)
-
-						fileButton.OnTapped = func() {
-							// 在这里，currentFilePath 已经被捕获，所以我们可以直接使用它
-
-							if isDir {
-								// 显示新文件夹的内容
-								showFolderContents(currentFilePath, editorVim, leftbottom)
-
-							} else {
-								readFile(currentFilePath, editorVim, fileButton)
-							}
-						}
-						leftbottom.Add(fileButton)
-					}
 					leftSplit.Add(leftbottom)
 					// 导入完成后，隐藏对话框
 					customDialog.Hide()
