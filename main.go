@@ -260,20 +260,20 @@ func main() {
 				fmt.Println("failed to get all values:", err)
 			}
 			fmt.Println("rAll:", rAll)
-			var result string
-			//for遍历rAll中所有的值，如果包含有3080 Ti字样的，则返回这条记录，没有则返回空
+			result := make(map[string]string)
+
 			for _, v := range rAll {
 				switch value := v.(type) {
 				case string:
 					if strings.Contains(value, gpuSelect.Selected) {
-						result = value
+						result["key"] = value
 						break
 					}
 				case map[string]string:
 					// 处理哈希类型的值
-					for _, hashValue := range value {
+					for key, hashValue := range value {
 						if strings.Contains(hashValue, gpuSelect.Selected) {
-							result = fmt.Sprintf("%v", value) // 将整个哈希转换为字符串
+							result[key] = hashValue
 							break
 						}
 					}
@@ -281,8 +281,8 @@ func main() {
 					fmt.Printf("unsupported value type: %T\n", v)
 				}
 			}
-			// 如果result为空，则说明没有匹配到，返回错误信息
-			if result != "" {
+			// 如果result中没有值
+			if result != nil {
 				fmt.Println("匹配到机器:", result)
 				dialog.ShowInformation("租用成功", "租用成功", myWindow)
 
@@ -341,7 +341,7 @@ func main() {
 	rentMachineButton := widget.NewButton("出租机器", func() {
 
 		machineModel := "MachineModel123"
-		uuidStr := machineModel
+		uuidStr := utils.GenerateUUID(machineModel).String()
 
 		// 根据 uuid 查询是否存在
 		exists, err := rdb.Exists(ctx, uuidStr).Result()
