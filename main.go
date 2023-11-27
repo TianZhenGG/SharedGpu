@@ -60,7 +60,7 @@ func handleShortcut(editor *widget.Entry, action string) {
 		keyEvent := &fyne.KeyEvent{Name: fyne.KeyA}
 		editor.TypedKey(keyEvent)
 		if keyEvent.Name == fyne.KeyA {
-			editor.TypedRune('a')
+			editor.TypedRune(' ')
 		}
 	case "delete":
 		// 删除的代码
@@ -480,7 +480,7 @@ func main() {
 
 	// 创建中间的编辑器
 	editorVim := widget.NewMultiLineEntry()
-	editorVim.SetPlaceHolder("请输入...")
+	editorVim.SetPlaceHolder("")
 	editorVim.Wrapping = fyne.TextWrapWord
 
 	// 使用这个函数
