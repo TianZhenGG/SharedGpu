@@ -2,40 +2,30 @@ package main
 
 import (
 	"fmt"
-	"os/exec"
-	"strings"
+	"log"
+	"net"
 )
 
-func GetGPUMemoryUsage() (map[string]string, error) {
-	cmd := exec.Command("nvidia-smi", "--query-gpu=name,memory.used", "--format=csv,noheader,nounits")
-	output, err := cmd.Output()
+func main() {
+	listener, err := net.Listen("tcp", ":3333")
 	if err != nil {
-		return nil, fmt.Errorf("failed to run nvidia-smi: %v", err)
+		log.Fatalf("Failed to listen on port 3333: %v", err)
 	}
 
-	lines := strings.Split(string(output), "\n")
-	gpuMemoryUsage := make(map[string]string)
-	for _, line := range lines {
-		if line == "" {
-			continue
+	defer listener.Close()
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			log.Fatalf("Failed to accept connection: %v", err)
 		}
-		parts := strings.Split(line, ", ")
-		gpuName := parts[0]
-		memoryUsed := parts[1]
-		gpuMemoryUsage[gpuName] = memoryUsed
-	}
 
-	return gpuMemoryUsage, nil
+		go handleConnection(conn)
+	}
 }
 
-func main() {
-	gpuMemoryUsage, err := GetGPUMemoryUsage()
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
-
-	for gpuName, memoryUsed := range gpuMemoryUsage {
-		fmt.Printf("GPU %s memory used: %s\n", gpuName, memoryUsed)
-	}
+func handleConnection(conn net.Conn) {
+	// 这里处理连接，例如读取和写入数据
+	fmt.Println("New connection!")
+	defer conn.Close()
 }
