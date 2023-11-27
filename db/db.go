@@ -25,8 +25,7 @@ func InitRedis() (*redis.Client, error) {
 
 	return rdb, nil
 }
-
-func GetAllValues() ([]string, error) {
+func GetAllValues() (map[string]interface{}, error) {
 	// 连接到 Redis
 	ctx := context.Background()
 
@@ -37,13 +36,31 @@ func GetAllValues() ([]string, error) {
 	}
 
 	// 获取所有键对应的值
-	var values []string
+	values := make(map[string]interface{})
 	for _, key := range keys {
-		value, err := rdb.Get(ctx, key).Result()
+		t, err := rdb.Type(ctx, key).Result()
 		if err != nil {
-			return nil, fmt.Errorf("failed to get value for key %s: %w", key, err)
+			return nil, fmt.Errorf("failed to get type for key %s: %w", key, err)
 		}
-		values = append(values, value)
+
+		var value interface{}
+		switch t {
+		case "string":
+			value, err = rdb.Get(ctx, key).Result()
+		case "list":
+			value, err = rdb.LRange(ctx, key, 0, -1).Result()
+		case "set":
+			value, err = rdb.SMembers(ctx, key).Result()
+		case "hash":
+			value, err = rdb.HGetAll(ctx, key).Result()
+		default:
+			err = fmt.Errorf("unsupported type %s for key %s", t, key)
+		}
+
+		if err != nil {
+			return nil, err
+		}
+		values[key] = value
 	}
 
 	return values, nil
