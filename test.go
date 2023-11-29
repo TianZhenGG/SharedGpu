@@ -1,31 +1,19 @@
+// HNZYjFVcG81ZW1vQ2hWS1pCOTRiaW5Cd0lIczF1c2F6TTkyMTRnNDBIcnlmNDFsSUFBQUFBJCQAAAAAAAAAAAEAAACm0-4~s~TLrrm10fjT4wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPLyZWXy8mVlO
+
 package main
 
 import (
-	"fmt"
-	"log"
-	"net"
+	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/widget"
 )
 
 func main() {
-	listener, err := net.Listen("tcp", ":3333")
-	if err != nil {
-		log.Fatalf("Failed to listen on port 3333: %v", err)
-	}
+	a := app.New()
+	w := a.NewWindow("Text Editor")
 
-	defer listener.Close()
+	label := widget.NewLabel("Hello, World!")
 
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Fatalf("Failed to accept connection: %v", err)
-		}
-
-		go handleConnection(conn)
-	}
-}
-
-func handleConnection(conn net.Conn) {
-	// 这里处理连接，例如读取和写入数据
-	fmt.Println("New connection!")
-	defer conn.Close()
+	w.SetContent(container.NewVBox(label))
+	w.ShowAndRun()
 }

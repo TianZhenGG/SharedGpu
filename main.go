@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"image/color"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -34,6 +35,8 @@ var (
 	// 定义一个全局的 leftline 变量
 	leftline = widget.NewMultiLineEntry()
 )
+
+var importPath string
 
 // 定义 displayArea 为全局变量
 var displayArea *widget.Entry
@@ -107,7 +110,12 @@ func readFile(currentFilePath string, editorVim *widget.Entry, fileButton *LeftA
 	leftline.SetText(lineNumbers)
 
 	// 将文件内容显示在编辑器中
-	editorVim.SetText(string(content))
+	//用canvas.NewText()来设置字体颜色
+	contentObj := canvas.NewText(string(content), color.RGBA{255, 255, 255, 255})
+	//设置字体大小
+	contentObj.TextSize = 20
+	contentStr := contentObj.Text
+	editorVim.SetText(string(contentStr))
 
 	// 添加横杠来表示当前选中的文件
 	fileButton.Text = "-" + fileButton.Text
@@ -226,7 +234,7 @@ func main() {
 		form := &widget.Form{}
 
 		// 添加显卡配置的下拉菜单
-		gpuOptions := []string{"3060", "RTX 3080 Ti", "3090"}
+		gpuOptions := []string{"敬请期待", "RTX 3080 Ti", "敬请期待"}
 		gpuSelect := widget.NewSelect(gpuOptions, func(value string) {
 			// 在这里处理用户选择的显卡配置
 		})
@@ -260,20 +268,20 @@ func main() {
 				fmt.Println("failed to get all values:", err)
 			}
 			fmt.Println("rAll:", rAll)
-			result := make(map[string]string)
+			var result string
 
 			for _, v := range rAll {
 				switch value := v.(type) {
 				case string:
 					if strings.Contains(value, gpuSelect.Selected) {
-						result["key"] = value
+						result = value
 						break
 					}
 				case map[string]string:
 					// 处理哈希类型的值
-					for key, hashValue := range value {
+					for _, hashValue := range value {
 						if strings.Contains(hashValue, gpuSelect.Selected) {
-							result[key] = hashValue
+							result = hashValue
 							break
 						}
 					}
@@ -281,8 +289,8 @@ func main() {
 					fmt.Printf("unsupported value type: %T\n", v)
 				}
 			}
-			// 如果result中没有值
-			if result != nil {
+			// 如果result不是空，说明匹配到了机器
+			if result != "" {
 				fmt.Println("匹配到机器:", result)
 				dialog.ShowInformation("租用成功", "租用成功", myWindow)
 
@@ -379,8 +387,30 @@ func main() {
 	})
 
 	rentMachineButton.Importance = widget.LowImportance
+	// 创建一个新的按钮
 	manageDatasetButton := widget.NewButton("数据集", func() {
-		// 在这里管理数据集的代码
+		// 弹出一个对话框，让用户选择是从本地导入还是从百度网盘导入
+		dialog.ShowCustomConfirm("导入数据集", "本地导入", "百度网盘导入", fyne.NewContainerWithLayout(layout.NewVBoxLayout()), func(local bool) {
+			if local {
+				// 如果用户选择了本地导入，弹出一个文件选择器
+				fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+					if err == nil && reader != nil {
+						// 这里处理文件
+					}
+				}, myWindow)
+				fd.Show()
+			} else {
+				// 如果用户选择了百度网盘导入，弹出一个表单让用户输入链接和密码
+				dialog.ShowForm("百度网盘导入", "确认", "取消", []*widget.FormItem{
+					widget.NewFormItem("链接", widget.NewEntry()),
+					widget.NewFormItem("密码", widget.NewPasswordEntry()),
+				}, func(ok bool) {
+					if ok {
+						// 这里处理百度网盘导入
+					}
+				}, myWindow)
+			}
+		}, myWindow)
 	})
 	manageDatasetButton.Importance = widget.HighImportance
 	// 创建一个新的容器
@@ -449,9 +479,8 @@ func main() {
 
 	// 创建 "回退" 按钮
 	backButton := widget.NewButtonWithIcon("", theme.NavigateBackIcon(), func() {
-		// 当点击按钮的时候，获取当前文件的路径，如果是第一级目录或者没有文件路径，则不做任何操作，否则返回上一级目录，刷新左侧的文件列表
-		// 如果当前目录为空，则不执行回退操作
-		if globalFolderPath == "" {
+		// 如果当前目录是导入代码的目录，或者为空，则不执行回退操作
+		if globalFolderPath == "" || globalFolderPath == importPath {
 			return
 		}
 
@@ -459,7 +488,7 @@ func main() {
 		parentPath := filepath.Dir(globalFolderPath)
 
 		// 如果当前目录已经是顶级目录，则不执行回退操作
-		if parentPath == globalFolderPath {
+		if parentPath == importPath {
 			return
 		}
 
@@ -474,7 +503,7 @@ func main() {
 	buttonContainer.Add(backButton)
 
 	leftSplit.Add(buttonContainer)
-	// leftSplit里面新建个容器叫做leftbottom
+	// leftSplit里面新建个容器叫做leftbottom,支持滚动
 	leftbottom := container.NewVBox()
 	// 设置文本对齐方式
 	alignment := fyne.TextAlignCenter
@@ -482,7 +511,7 @@ func main() {
 	// 创建一个新的文本样式
 	textStyle := fyne.TextStyle{Bold: true, Italic: true}
 
-	// 创建一个新的标签
+	// 创建一个新的标签,可以滚动
 	label := widget.NewLabelWithStyle("你的文本", alignment, textStyle)
 
 	// 将标签添加到 leftbottom 容器
@@ -526,18 +555,27 @@ func main() {
 				for i := 1; i <= len(lines); i++ {
 					lineNumbers += fmt.Sprintf("%d\n", i)
 				}
-				leftline.SetText(lineNumbers)
+				//颜色设置为黄色
+				lineNumbersObj := canvas.NewText(lineNumbers, color.RGBA{255, 255, 0, 255})
+				lineNumbersStr := lineNumbersObj.Text
+				leftline.SetText(lineNumbersStr)
 			}
 		}
 	}()
 	// 创建新的按钮
-	rightButton := widget.NewButton("执行", func() {
+	debugButton := widget.NewButton("调试", func() {
 		// 按钮的点击事件处理函数
 	})
 
+	executeButton := widget.NewButton("执行", func() {
+		// 按钮的点击事件处理函数
+	})
+	// 竖直布局
+	buttonBox := container.NewVBox(debugButton, executeButton)
+
 	newBottom := container.NewHSplit(
 		output,
-		rightButton,
+		buttonBox,
 	)
 
 	newBottom.Offset = 0.9 // 设置 output 和 rightButton 的大小比例为 9:1
@@ -582,6 +620,7 @@ func main() {
 					globalFolderPath = uri.Path()
 					globalEditorVim = editorVim
 					globalLeftbottom = leftbottom
+					importPath = uri.Path()
 
 					showFolderContents(globalFolderPath, globalEditorVim, globalLeftbottom)
 

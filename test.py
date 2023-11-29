@@ -7,7 +7,7 @@ import requests
 class chat_bot():
     def __init__(self):
         self.url = "https://openai-proxy-api.pages.dev/api/v1/chat/completions"
-        self.api_key = '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'
+        self.api_key = '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'
         self.headers = {
           'Authorization': f'Bearer {self.api_key}',
           'Content-Type': 'application/json'
@@ -33,7 +33,6 @@ class chat_bot():
         
 
 send = chat_bot()
-while True:
-    content = "111"
-    print(send.chat(content))
+content = "为什么别人用stable diffusion图生图颜色，光影都很好看，有什么小技巧吗"
+print(send.chat(content))
 
