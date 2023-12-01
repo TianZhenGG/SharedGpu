@@ -74,7 +74,7 @@ func handleShortcut(editor *widget.Entry, action string) {
 	}
 }
 
-func readFile(currentFilePath string, editorVim *widget.Entry, fileButton *LeftAlignedButton) {
+func readFile(currentFilePath string, editorVim *widget.Entry) {
 	// 检查文件是否存在
 	if _, err := os.Stat(currentFilePath); os.IsNotExist(err) {
 		fyne.LogError("文件不存在", err)
@@ -116,10 +116,6 @@ func readFile(currentFilePath string, editorVim *widget.Entry, fileButton *LeftA
 	contentObj.TextSize = 20
 	contentStr := contentObj.Text
 	editorVim.SetText(string(contentStr))
-
-	// 添加横杠来表示当前选中的文件
-	fileButton.Text = "-" + fileButton.Text
-	fileButton.Refresh()
 }
 
 func showFolderContents(folderPath string, editorVim *widget.Entry, leftbottom *fyne.Container) {
@@ -149,10 +145,18 @@ func showFolderContents(folderPath string, editorVim *widget.Entry, leftbottom *
 		return
 	}
 
+	// // 初始化随机数生成器
+	// rand.Seed(time.Now().UnixNano())
+
+	// // 打乱 files 切片
+	// rand.Shuffle(len(files), func(i, j int) {
+	// 	files[i], files[j] = files[j], files[i]
+	// })
+
 	// 清空当前的 leftbottom 容器
 	leftbottom.Objects = nil
-
-	// 为每个文件或文件夹创建一个按钮
+	//files 顺序随机打乱
+	// 为每个文件或文件夹创建一个对象，用theme接口创建
 	for _, f := range files {
 		file := f // 创建一个新的变量来存储当前的文件
 
@@ -160,25 +164,18 @@ func showFolderContents(folderPath string, editorVim *widget.Entry, leftbottom *
 		currentFilePath := filepath.Join(folderPath, file.Name())
 
 		if file.IsDir() {
-			//新按钮跟fileButton不一样
-			folderButton := NewLeftAlignedButton(file.Name(), nil)
-			folderButton.Text = file.Name() + "/"
-			folderButton.OnTapped = func() {
+			folderButton := widget.NewButtonWithIcon(file.Name(), theme.FolderIcon(), func() {
 				// 是文件夹，显示文件夹下的内容
 				showFolderContents(currentFilePath, editorVim, leftbottom)
-			}
+			})
 			leftbottom.Add(folderButton)
 		} else {
-			fileButton := NewLeftAlignedButton(file.Name(), nil)
-
-			fileButton.OnTapped = func() {
-				// 是文件，读取并显示文件内容
-				readFile(currentFilePath, editorVim, fileButton)
-			}
+			fileButton := widget.NewButtonWithIcon(file.Name(), theme.FileIcon(), func() {
+				// 是文件，显示文件内容
+				readFile(currentFilePath, editorVim)
+			})
 			leftbottom.Add(fileButton)
-
 		}
-
 	}
 
 	// 刷新 leftbottom 容器
@@ -217,7 +214,7 @@ func main() {
 	myApp.Settings().SetTheme(theme.DarkTheme())
 
 	myWindow := myApp.NewWindow("Client")
-	myWindow.Resize(fyne.NewSize(800, 600))
+	myWindow.Resize(fyne.NewSize(1024, 768))
 
 	// 创建一个 context.Context 对象
 	ctx := context.Background()
@@ -225,7 +222,6 @@ func main() {
 	rdb, err := db.InitRedis()
 	if err != nil {
 		fmt.Println("redis init failed")
-		return
 	}
 	// 创建添加和删除机器的按钮，并设置颜色
 	addMachineButton := widget.NewButton("租用机器", func() {
@@ -387,32 +383,6 @@ func main() {
 	})
 
 	rentMachineButton.Importance = widget.LowImportance
-	// 创建一个新的按钮
-	manageDatasetButton := widget.NewButton("数据集", func() {
-		// 弹出一个对话框，让用户选择是从本地导入还是从百度网盘导入
-		dialog.ShowCustomConfirm("导入数据集", "本地导入", "百度网盘导入", fyne.NewContainerWithLayout(layout.NewVBoxLayout()), func(local bool) {
-			if local {
-				// 如果用户选择了本地导入，弹出一个文件选择器
-				fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
-					if err == nil && reader != nil {
-						// 这里处理文件
-					}
-				}, myWindow)
-				fd.Show()
-			} else {
-				// 如果用户选择了百度网盘导入，弹出一个表单让用户输入链接和密码
-				dialog.ShowForm("百度网盘导入", "确认", "取消", []*widget.FormItem{
-					widget.NewFormItem("链接", widget.NewEntry()),
-					widget.NewFormItem("密码", widget.NewPasswordEntry()),
-				}, func(ok bool) {
-					if ok {
-						// 这里处理百度网盘导入
-					}
-				}, myWindow)
-			}
-		}, myWindow)
-	})
-	manageDatasetButton.Importance = widget.HighImportance
 	// 创建一个新的容器
 	leftSplit := container.NewVBox()
 
@@ -528,42 +498,8 @@ func main() {
 	editorVim.SetPlaceHolder("")
 	editorVim.Wrapping = fyne.TextWrapWord
 
-	// 使用这个函数
-	handleShortcut(editorVim, "save")
-	handleShortcut(editorVim, "undo")
-	handleShortcut(editorVim, "selectAll")
-	handleShortcut(editorVim, "delete")
-	handleShortcut(editorVim, "comment")
-
-	// 创建一个定时器，每隔一段时间就检查 editorVim 的内容
-	ticker := time.NewTicker(time.Millisecond * 500)
-
-	go func() {
-		for range ticker.C {
-			// 获取 editorVim 的内容
-			content := editorVim.Text
-
-			// 计算行数
-			lines := strings.Split(content, "\n")
-
-			// 计算 leftline 的行数
-			leftlineLines := strings.Count(leftline.Text, "\n")
-
-			// 如果行数和 leftline 的行数不同，就更新 leftline
-			if len(lines) != leftlineLines {
-				lineNumbers := ""
-				for i := 1; i <= len(lines); i++ {
-					lineNumbers += fmt.Sprintf("%d\n", i)
-				}
-				//颜色设置为黄色
-				lineNumbersObj := canvas.NewText(lineNumbers, color.RGBA{255, 255, 0, 255})
-				lineNumbersStr := lineNumbersObj.Text
-				leftline.SetText(lineNumbersStr)
-			}
-		}
-	}()
 	// 创建新的按钮
-	debugButton := widget.NewButton("调试", func() {
+	debugButton := widget.NewButton("GPT", func() {
 		// 按钮的点击事件处理函数
 	})
 
@@ -583,6 +519,7 @@ func main() {
 	// 和editorVim按1：9的比例合并
 	leftConn := container.NewHSplit(leftline, editorVim)
 	leftConn.Offset = 0.01
+	//监听滚动事件
 	// 创建一个支持滚动的容器，然后将 editorVim 添加到这个容器中
 	scrollableEditorVim := container.NewHScroll(leftConn)
 
@@ -603,6 +540,7 @@ func main() {
 		newBottom,
 	)
 	importButton := widget.NewButton("导入代码", func() {
+
 		// 创建一个新的列表来显示文件名
 		fileList := widget.NewList(
 			func() int { return 0 },                                 // 初始时列表为空
@@ -619,6 +557,11 @@ func main() {
 					// 更新全局变量为选择的路径
 					globalFolderPath = uri.Path()
 					globalEditorVim = editorVim
+					//空fyne.Container
+					// 从 leftSplit 中移除旧的 leftbottom 容器
+					leftSplit.Remove(leftbottom)
+					// 创建一个新的 leftbottom 容器来替换旧的
+					leftbottom = fyne.NewContainerWithLayout(layout.NewVBoxLayout())
 					globalLeftbottom = leftbottom
 					importPath = uri.Path()
 
@@ -650,7 +593,6 @@ func main() {
 		container.NewVBox(
 			addMachineButton,
 			rentMachineButton,
-			manageDatasetButton,
 			importButton, // 新添加的按钮
 		),
 		widget.NewSeparator(),
