@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/go-redis/redis/v8"
 )
@@ -25,43 +24,29 @@ func InitRedis() (*redis.Client, error) {
 
 	return rdb, nil
 }
-func GetAllValues() (map[string]interface{}, error) {
-	// 连接到 Redis
-	ctx := context.Background()
 
-	// 查询所有的键
-	keys, err := rdb.Keys(ctx, "*").Result()
+// hget all key field gpu字段 且status为0
+func HgetallByValue(ctx context.Context, rdb *redis.Client, field string, selectedValue string) ([]string, error) {
+	var keysWithSelectedValue []string
+
+	// 获取所有的键
+	keys, _, err := rdb.Scan(ctx, 0, "*", 0).Result()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get keys: %w", err)
+		return nil, err
 	}
 
-	// 获取所有键对应的值
-	values := make(map[string]interface{})
 	for _, key := range keys {
-		t, err := rdb.Type(ctx, key).Result()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get type for key %s: %w", key, err)
-		}
-
-		var value interface{}
-		switch t {
-		case "string":
-			value, err = rdb.Get(ctx, key).Result()
-		case "list":
-			value, err = rdb.LRange(ctx, key, 0, -1).Result()
-		case "set":
-			value, err = rdb.SMembers(ctx, key).Result()
-		case "hash":
-			value, err = rdb.HGetAll(ctx, key).Result()
-		default:
-			err = fmt.Errorf("unsupported type %s for key %s", t, key)
-		}
-
+		// 获取指定字段的值
+		value, err := rdb.HGet(ctx, key, field).Result()
 		if err != nil {
 			return nil, err
 		}
-		values[key] = value
+
+		// 如果值是 selectedValue将键添加到结果列表
+		if value == selectedValue {
+			keysWithSelectedValue = append(keysWithSelectedValue, key)
+		}
 	}
 
-	return values, nil
+	return keysWithSelectedValue, nil
 }

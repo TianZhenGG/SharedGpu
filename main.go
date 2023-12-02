@@ -36,8 +36,8 @@ var (
 
 	// 定义一个全局的 leftline 变量
 	leftline = widget.NewMultiLineEntry()
-
-	uuidStr string
+	labelout *widget.Label
+	uuidStr  string
 )
 
 var importPath string
@@ -240,84 +240,152 @@ func main() {
 				return
 			}
 
-			// gpuselect值来模糊匹配gpu型号
+			// gpuselect值来匹配gpu型号
 			fmt.Println("gpuSelect:", gpuSelect.Selected)
-			// 查询redis下所有value记录并打印出来
-			rAll, err := db.GetAllValues()
-			if err != nil {
-				fmt.Println("failed to get all values:", err)
+			// 查询redis下所有包含value 字段gpuinfo是gpuSelect.Selected的key
+
+			var startTime time.Time
+
+			if startTime.IsZero() {
+				startTime = time.Now()
 			}
-			fmt.Println("rAll:", rAll)
-			var result string
 
-			for _, v := range rAll {
-				switch value := v.(type) {
-				case string:
-					if strings.Contains(value, gpuSelect.Selected) {
-						result = value
-						break
-					}
-				case map[string]string:
-					// 处理哈希类型的值
-					for _, hashValue := range value {
-						if strings.Contains(hashValue, gpuSelect.Selected) {
-							result = hashValue
-							break
-						}
-					}
-				default:
-					fmt.Printf("unsupported value type: %T\n", v)
-				}
-			}
-			// 如果result不是空，说明匹配到了机器
-			if result != "" {
-				fmt.Println("匹配到机器:", result)
-				dialog.ShowInformation("租用成功", "租用成功", myWindow)
+			//想把下面的程序改成0.5s执行一次去redis里面查询是否有匹配的机器，如果有则显示连接成功，如果没有则显示暂无资源
 
-				// 创建 SSH 客户端配置
-				config := &ssh.ClientConfig{
-					User: "tian",
-					Auth: []ssh.AuthMethod{
-						ssh.Password("tian"),
-					},
-					HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-				}
+			// 创建一个新的 Context 实例
+			ctx := context.Background()
+			gpuSelect.Selected = "NVIDIA GeForce " + gpuSelect.Selected
+			var ConnKey string
+			go func() {
+				ticker := time.NewTicker(1 * time.Second)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ticker.C:
 
-				// 在 goroutine 外部定义一个变量来存储初次连接成功的时间
-				var startTime time.Time
-
-				go func() {
-					for range time.Tick(time.Second) {
-						client, err := ssh.Dial("tcp", "127.0.0.1:3333", config)
+						// 从 Redis 中获取所有包含 gpuSelect.Selected 的键且 status 为 0 的键
+						result, err := db.HgetallByValue(ctx, rdb, "gpu", gpuSelect.Selected)
 						if err != nil {
-							displayArea.SetText("连接失败: " + err.Error())
+							labelout.SetText("没有匹配的机器。。。")
+						}
+
+						//如果result中有key则看一下是不是跟ConnKey一致，如果一致且stauts是1则跳出循环，如果是0，则匹配此机器，将状态置为1
+						if len(result) == 0 {
+							if ConnKey == "" {
+								labelout.SetText("没有合适机器")
+							} else {
+								status, err := rdb.HGet(ctx, ConnKey, "status").Result()
+								if err != nil {
+									startTime = time.Now()
+
+									labelout.SetText("暂无机器可以使用。。。")
+									continue
+								}
+								if status == "1" {
+									continue
+								} else {
+									labelout.SetText("机器重连失败")
+								}
+
+							}
 						} else {
-							// 如果是初次连接成功，获取当前时间
-							if startTime.IsZero() {
-								startTime = time.Now()
+							for _, key := range result {
+								// 获取 status 字段的值
+								status, err := rdb.HGet(ctx, key, "status").Result()
+								if err != nil {
+									labelout.SetText("暂无机器可以使用。。。")
+									continue
+								}
+								// 如果键与 ConnKey 一致
+								if key == ConnKey {
+									// 如果 status 为 1，跳出循环
+									if status == "1" {
+										// 计算时间差
+										duration := time.Since(startTime)
+
+										// 计算天、小时、分钟和秒
+										days := int(duration.Hours()) / 24
+										hours := int(duration.Hours()) % 24
+										minutes := int(duration.Minutes()) % 60
+										seconds := int(duration.Seconds()) % 60
+
+										// 显示连接成功和时间差还有gpu相关信息
+										labelout.SetText(fmt.Sprintf("连接成功，已连接：%d天%d小时%d分钟%d秒，\nGPU:%s", days, hours, minutes, seconds, gpuSelect.Selected))
+										continue
+									}
+									// 如果 status 为 0，匹配此机器，并将状态置为 1
+									if status == "0" {
+										err := rdb.HSet(ctx, key, "status", "1").Err()
+										if err != nil {
+
+											labelout.SetText("重新匹配机器成功。。。")
+										}
+										ConnKey = key
+
+										// 创建 SSH 客户端配置
+										config := &ssh.ClientConfig{
+											User: "tian",
+											Auth: []ssh.AuthMethod{
+												ssh.Password("tian"),
+											},
+											HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+										}
+
+										go func() {
+											for range time.Tick(time.Second) {
+												client, err := ssh.Dial("tcp", "127.0.0.1:3333", config)
+												if err != nil {
+													fmt.Println("连接失败: ", err)
+													labelout.SetText("连接失败: " + err.Error())
+												} else {
+													client.Close()
+												}
+											}
+										}()
+									}
+								} else {
+									// 如果 status 为 0，匹配此机器，并将状态置为 1
+									if status == "0" {
+										err := rdb.HSet(ctx, key, "status", "1").Err()
+										if err != nil {
+											fmt.Println("failed to set status:", err)
+										}
+										ConnKey = key
+
+										// 创建 SSH 客户端配置
+										config := &ssh.ClientConfig{
+											User: "tian",
+											Auth: []ssh.AuthMethod{
+												ssh.Password("tian"),
+											},
+											HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+										}
+
+										go func() {
+											for range time.Tick(time.Second) {
+												client, err := ssh.Dial("tcp", "127.0.0.1:3333", config)
+												if err != nil {
+													fmt.Println("连接失败: ", err)
+													labelout.SetText("连接失败: " + err.Error())
+												} else {
+
+													client.Close()
+												}
+											}
+										}()
+										labelout.SetText("匹配机器成功。。。")
+									}
+									if status == "1" {
+										startTime = time.Now()
+										labelout.SetText("暂无机器可以挂载...")
+									}
+								}
 							}
 
-							// 计算时间差
-							duration := time.Since(startTime)
-
-							// 计算天、小时、分钟和秒
-							days := int(duration.Hours()) / 24
-							hours := int(duration.Hours()) % 24
-							minutes := int(duration.Minutes()) % 60
-							seconds := int(duration.Seconds()) % 60
-
-							// 显示连接成功和时间差还有gpu相关信息
-							displayArea.SetText(fmt.Sprintf("连接成功，已连接：%d天%d小时%d分钟%d秒，\nGPU:%s", days, hours, minutes, seconds, result))
-
-							client.Close()
 						}
 					}
-				}()
-
-			} else {
-				fmt.Println("没有匹配到机器")
-				dialog.ShowInformation("暂无资源", "暂无资源", myWindow)
-			}
+				}
+			}()
 
 		}, myWindow)
 
@@ -346,9 +414,14 @@ func main() {
 			}
 
 			fmt.Println("cpuInfo:", cpuInfo, "memoryInfo:", memoryInfo, "gpuInfo:", gpuInfo)
-
+			//gpuinfo  from NVIDIA GeForce RTX 3080 Ti: 616 to RTX 3080 Ti
+			gpuInfo = strings.Split(gpuInfo, ":")[0]
+			fmt.Println("gpuInfo:", gpuInfo)
 			// 将 uuid 和机器的 CPU、内存、显卡型号存入 redis 想变成json形式
-			err = rdb.HSet(ctx, uuidStr, "cpu", cpuInfo, "memory", memoryInfo, "gpu", gpuInfo).Err()
+			// 新加个字段status 0表示没有任务需要执行，1表示有任务需要执行，2表示任务执行完成
+			// 新加个字段submitTime 用于记录任务提交时间
+			// 新加个字段log 用于记录任务执行日志
+			err = rdb.HSet(ctx, uuidStr, "cpu", cpuInfo, "memory", memoryInfo, "gpu", gpuInfo, "status", "0", "taskStatus", "0", "submitTime", time.Now().Format("2006-01-02 15:04:05"), "log", "testting").Err()
 			if err != nil {
 				fmt.Println("failed to set info to redis :", err)
 			}
@@ -358,7 +431,10 @@ func main() {
 		// 在新的 goroutine 中运行 proxy.StartSShServer()
 		go func() {
 			errChan := proxy.StartSShServer()
-			_ = <-errChan
+			err = <-errChan
+			if err != nil {
+				fmt.Println("failed to start ssh server:", err)
+			}
 			utils.CreateNewWindow(rdb, uuidStr)
 		}()
 	})
@@ -486,29 +562,78 @@ func main() {
 
 	executeButton := widget.NewButton("执行", func() {
 		// 按钮的点击事件时将globalproject压缩并上传到网盘
+		//清空网盘文件夹
+		err := bdfs.DeleteDir(uuidStr)
+		if err != nil {
+			fmt.Println("failed to delete dir:", err)
+		}
+		labelout.SetText("清空网盘任务。。。")
 		// 压缩文件夹
 		bdfs.Zipit(globalProject, globalProject+".zip")
 		err = bdfs.CreateDir(uuidStr)
 		if err != nil {
 			fmt.Println("failed to create dir:", err)
 		}
+		labelout.SetText("压缩文件夹。。。")
+
 		// 上传文件夹
 		err = bdfs.Upload(globalProject+".zip", uuidStr)
 		if err != nil {
 			fmt.Println("failed to upload file:", err)
 		}
+		labelout.SetText("上传文件夹。。。")
 		// 删除本地压缩文件
 		err = os.Remove(globalProject + ".zip")
 		if err != nil {
 			fmt.Println("failed to remove file:", err)
 		}
-		// 下载文件夹
-		//get folder from path
-		projectFolder := filepath.Base(globalProject)
-		fmt.Println("globalProject:", projectFolder)
-		err = bdfs.Download(uuidStr, projectFolder+".zip")
+		// 更新redis uuid 下的任务状态为有任务需要执行，并将提交时间更新为当前时间
+		err = rdb.HSet(ctx, uuidStr, "taskStatus", "1", "log", "testing", "submitTime", time.Now().Format("2006-01-02 15:04:05")).Err()
 		if err != nil {
-			fmt.Println("failed to download file:", err)
+			fmt.Println("failed to set info to redis :", err)
+		}
+		//不停的轮询redis uuid 下的任务状态，如果为2，则下载文件夹
+		for {
+			// 获取任务状态
+			status, err := rdb.HGet(ctx, uuidStr, "taskStatus").Result()
+			if err != nil {
+				fmt.Println("failed to get status:", err)
+			}
+			time.Sleep(time.Second * 2)
+			if status == "2" {
+				projectFolder := filepath.Base(globalProject)
+				err = bdfs.Download(uuidStr, projectFolder+".zip")
+				if err != nil {
+					fmt.Println("failed to download file:", err)
+				}
+				labelout.SetText("任务执行完成，获取结果。。。")
+				// 获取执行日志
+				log, err := rdb.HGet(ctx, uuidStr, "log").Result()
+				if err != nil {
+					fmt.Println("failed to get log:", err)
+				}
+				labelout.SetText(log)
+
+				// // 确保下载操作已完成
+				// time.Sleep(time.Second * 5)
+
+				// // 解压文件
+				// err = bdfs.Unzip(projectFolder+".zip", globalProject)
+				// if err != nil {
+				// 	fmt.Println("failed to unzip file:", err)
+				// }
+
+				// // 确保解压操作已完成
+				// time.Sleep(time.Second * 5)
+
+				// // 删除本地压缩文件
+				// err = os.Remove(projectFolder + ".zip")
+				// if err != nil {
+				// 	fmt.Println("failed to remove file:", err)
+				// }
+
+				return
+			}
 		}
 
 	})
@@ -531,10 +656,9 @@ func main() {
 
 	// 创建新的显示区域,可以滚动但是不能编辑
 	// 创建一个新的显示区域
-	label = widget.NewLabel("输出区域")
-
+	labelout = widget.NewLabel("输出区域")
 	// 创建一个可以滚动的容器
-	displayArea := container.NewVScroll(label)
+	displayArea := container.NewVScroll(labelout)
 
 	// 将scrollableEditorVim和displayArea添加到新的HSplit中
 	HSplit := container.NewVSplit(
@@ -596,16 +720,30 @@ func main() {
 		customDialog.Show()
 	})
 
-	// 在左侧菜单栏添加新的按钮
-	leftMenu := container.NewHBox(
-		container.NewVBox(
-			addMachineButton,
-			rentMachineButton,
-			importButton, // 新添加的按钮
-		),
-		widget.NewSeparator(),
-		container.NewMax(),
+	// 创建几个新的按钮
+	button1 := widget.NewButtonWithIcon("Button 1", theme.DownloadIcon(), func() {
+		// 在这里处理用户点击 "Button 1" 的事件
+	})
+	button2 := widget.NewButtonWithIcon("Button 2", theme.AccountIcon(), func() {
+		// 在这里处理用户点击 "Button 2" 的事件
+	})
+
+	// 创建一个新的 VBox 容器，包含你的菜单
+	menu := container.NewVBox(
+		addMachineButton,
+		rentMachineButton,
+		importButton,          // 新添加的按钮
+		widget.NewSeparator(), // 添加一个分隔符
 	)
+
+	// 创建一个新的 VBox 容器，包含你的按钮
+	buttons := container.NewVBox(
+		button1, // 添加快捷按钮
+		button2, // 添加快捷按钮
+	)
+
+	// 使用 container.NewBorder 创建一个新的容器，将菜单放在顶部，将按钮放在底部
+	leftMenu := container.NewBorder(menu, buttons, nil, nil)
 
 	// 调整中间编辑器的位置
 	editorVimSplit.Offset = 0.9

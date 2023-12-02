@@ -2,6 +2,7 @@ package bdfs
 
 import (
 	"archive/zip"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -48,18 +49,16 @@ func CreateDir(remoteDir string) error {
 	}
 }
 
-func Download(remoteDir, remoteFile string) error {
-	//if windows
+func DeleteDir(remoteDir string) error {
 	if runtime.GOOS == "windows" {
-		cmd := exec.Command("powershell", "bdfs/baidupcs-go.exe", "d  --ow --status --save -p 20 -l 20", remoteDir+"/"+remoteFile)
+		cmd := exec.Command("powershell", "bdfs/baidupcs-go.exe", "rm", remoteDir)
 		err := cmd.Run()
 		if err != nil {
 			return err
 		}
 		return nil
 	} else {
-		fmt.Println("linux")
-		cmd := exec.Command("bdfs/baidupcs-go", "download", "--ow --status --save -p 20 -l 20", remoteDir+remoteFile)
+		cmd := exec.Command("bdfs/baidupcs-go", "rm", remoteDir)
 		err := cmd.Run()
 		if err != nil {
 			return err
@@ -68,22 +67,56 @@ func Download(remoteDir, remoteFile string) error {
 	}
 }
 
-func Upload(localFile, remoteDir string) error {
+func Download(remoteDir, remoteFile string) error {
+	// 创建一个新的 Context 实例
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 如果是 windows
 	if runtime.GOOS == "windows" {
-		cmd := exec.Command("powershell", "bdfs/baidupcs-go.exe", "upload", "-p 10 -l 10", localFile, remoteDir)
+		cmd := exec.CommandContext(ctx, "powershell", "bdfs/baidupcs-go.exe", "d  --ow --status --save -p 20 -l 20", remoteDir+"/"+remoteFile)
 		err := cmd.Run()
 		if err != nil {
 			return err
 		}
-		return nil
 	} else {
-		cmd := exec.Command("bdfs/baidupcs-go", "upload", "-p 10 -l 10", localFile, remoteDir)
+		fmt.Println("linux")
+		cmd := exec.CommandContext(ctx, "bdfs/baidupcs-go", "download", "--ow --status --save -p 20 -l 20", remoteDir+remoteFile)
 		err := cmd.Run()
 		if err != nil {
 			return err
 		}
-		return nil
 	}
+
+	// 下载完成后取消进程
+	cancel()
+
+	return nil
+}
+
+func Upload(localFile, remoteDir string) error {
+	// 创建一个新的 Context 实例
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if runtime.GOOS == "windows" {
+		cmd := exec.CommandContext(ctx, "powershell", "bdfs/baidupcs-go.exe", "upload", "-p 10 -l 10", localFile, remoteDir)
+		err := cmd.Run()
+		if err != nil {
+			return err
+		}
+	} else {
+		cmd := exec.CommandContext(ctx, "bdfs/baidupcs-go", "upload", "-p 10 -l 10", localFile, remoteDir)
+		err := cmd.Run()
+		if err != nil {
+			return err
+		}
+	}
+
+	// 上传完成后取消进程
+	cancel()
+
+	return nil
 }
 
 func Zipit(source, target string) error {
