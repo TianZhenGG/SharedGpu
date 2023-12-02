@@ -721,7 +721,7 @@ func main() {
 	})
 
 	// 创建几个新的按钮
-	button1 := widget.NewButtonWithIcon("Button 1", theme.DownloadIcon(), func() {
+	button1 := widget.NewButton("B", func() {
 		// 在这里处理用户点击 "Button 1" 的事件
 	})
 	button2 := widget.NewButtonWithIcon("Button 2", theme.AccountIcon(), func() {
