@@ -1,48 +1,57 @@
-package main
+package bdfs
 
 import (
-	"archive/tar"
-	"compress/gzip"
+	"archive/zip"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sharedgpu/utils"
 	"strings"
 )
 
-func main() {
-	// 下载文件
-	err := download("sharedgpu/", "miniconda.zip")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// 解压文件
-	err = untar("path/to/local/file.tar", "path/to/dest/dir")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// 压缩文件
-	err = tarit("path/to/local/dir", "path/to/local/file.tar")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// 上传文件
-	err = upload("path/to/local/file.tar", "/path/to/remote/dir")
-	if err != nil {
-		log.Fatal(err)
+func loginBd(bduss string) error {
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command("powershell", "bdfs/baidupcs-go.exe", "login", "-bduss=", bduss)
+		err := cmd.Run()
+		if err != nil {
+			return err
+		}
+		return nil
+	} else {
+		cmd := exec.Command("bdfs/baidupcs-go", "login", "--bduss="+bduss)
+		err := cmd.Run()
+		if err != nil {
+			return err
+		}
+		return nil
 	}
 }
 
-func download(remoteDir, remoteFile string) error {
+func CreateDir(remoteDir string) error {
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command("powershell", "bdfs/baidupcs-go.exe", "mkdir", remoteDir)
+		err := cmd.Run()
+		if err != nil {
+			return err
+		}
+		return nil
+	} else {
+		cmd := exec.Command("bdfs/baidupcs-go", "mkdir", remoteDir)
+		err := cmd.Run()
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+}
+
+func Download(remoteDir, remoteFile string) error {
 	//if windows
 	if runtime.GOOS == "windows" {
-		cmd := exec.Command("powershell", "bdfs/baidupcs-go.exe", "d  --ow --status --save -p 20 -l 20", remoteDir+remoteFile)
+		cmd := exec.Command("powershell", "bdfs/baidupcs-go.exe", "d  --ow --status --save -p 20 -l 20", remoteDir+"/"+remoteFile)
 		err := cmd.Run()
 		if err != nil {
 			return err
@@ -59,16 +68,16 @@ func download(remoteDir, remoteFile string) error {
 	}
 }
 
-func upload(localFile, remoteDir string) error {
+func Upload(localFile, remoteDir string) error {
 	if runtime.GOOS == "windows" {
-		cmd := exec.Command("powershell", "bdfs/baidupcs-go.exe", "upload", localFile, remoteDir)
+		cmd := exec.Command("powershell", "bdfs/baidupcs-go.exe", "upload", "-p 10 -l 10", localFile, remoteDir)
 		err := cmd.Run()
 		if err != nil {
 			return err
 		}
 		return nil
 	} else {
-		cmd := exec.Command("bdfs/baidupcs-go", "upload", localFile, remoteDir)
+		cmd := exec.Command("bdfs/baidupcs-go", "upload", "-p 10 -l 10", localFile, remoteDir)
 		err := cmd.Run()
 		if err != nil {
 			return err
@@ -77,91 +86,120 @@ func upload(localFile, remoteDir string) error {
 	}
 }
 
-func untar(tarball, target string) error {
-	reader, err := os.Open(tarball)
+func Zipit(source, target string) error {
+	zipfile, err := os.Create(target)
 	if err != nil {
 		return err
 	}
-	defer reader.Close()
+	defer zipfile.Close()
 
-	tarReader := tar.NewReader(reader)
+	archive := zip.NewWriter(zipfile)
+	defer archive.Close()
 
-	for {
-		header, err := tarReader.Next()
-		if err == io.EOF {
-			break
-		} else if err != nil {
+	filepath.Walk(source, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
 			return err
 		}
 
-		path := filepath.Join(target, header.Name)
-		info := header.FileInfo()
-
-		if info.IsDir() {
-			if err = os.MkdirAll(path, info.Mode()); err != nil {
-				return err
+		// 如果文件或文件夹的名称以 "." 开头，跳过它
+		if strings.HasPrefix(filepath.Base(path), ".") {
+			if info.IsDir() {
+				return filepath.SkipDir
 			}
-			continue
-		}
-
-		file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode())
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-
-		_, err = io.Copy(file, tarReader)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func tarit(source, target string) error {
-	file, err := os.Create(target)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	gw := gzip.NewWriter(file)
-	defer gw.Close()
-
-	tw := tar.NewWriter(gw)
-	defer tw.Close()
-
-	return filepath.Walk(source, func(file string, fi os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		header, err := tar.FileInfoHeader(fi, file)
-		if err != nil {
-			return err
-		}
-
-		header.Name = filepath.Join(filepath.Base(source), strings.TrimPrefix(file, source))
-
-		if err := tw.WriteHeader(header); err != nil {
-			return err
-		}
-
-		if !fi.Mode().IsRegular() {
 			return nil
 		}
 
-		f, err := os.Open(file)
+		// 获取相对路径
+		relPath, err := filepath.Rel(source, path)
 		if err != nil {
 			return err
 		}
-		defer f.Close()
 
-		if _, err := io.Copy(tw, f); err != nil {
+		// 创建一个新的文件头
+		header, err := zip.FileInfoHeader(info)
+		if err != nil {
 			return err
 		}
 
-		return nil
+		// 设置文件头的名称为相对路径
+		header.Name = relPath
+
+		if info.IsDir() {
+			header.Name += "/"
+		} else {
+			header.Method = zip.Deflate
+		}
+
+		writer, err := archive.CreateHeader(header)
+		if err != nil {
+			return err
+		}
+
+		if !info.IsDir() {
+			file, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+			_, err = io.Copy(writer, file)
+		}
+		return err
 	})
+	return err
+}
+
+func Unzip(archive, target string) error {
+	reader, err := zip.OpenReader(archive)
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(target, 0755); err != nil {
+		return err
+	}
+
+	for _, file := range reader.File {
+		path := filepath.Join(target, file.Name)
+		if file.FileInfo().IsDir() {
+			os.MkdirAll(path, file.Mode())
+			continue
+		}
+
+		fileReader, err := file.Open()
+		if err != nil {
+			return err
+		}
+		defer fileReader.Close()
+
+		targetFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode())
+		if err != nil {
+			return err
+		}
+		defer targetFile.Close()
+
+		if _, err := io.Copy(targetFile, fileReader); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func main() {
+	// folderPath := "E:/SharedGpu"
+	// uuid := "dadadasdadafasfa"
+	// err := CreateDir(uuid)
+	// if err != nil {
+	// 	fmt.Println(err)
+	// }
+	// err = Upload(folderPath+".zip", uuid)
+	// if err != nil {
+	// 	fmt.Println(err)
+	// }
+	machineModel := "MachineModel123"
+	uuidStr := utils.GenerateUUID(machineModel).String()
+	fmt.Println(uuidStr)
+	err := Download(uuidStr, "SharedGpu.zip")
+	if err != nil {
+		fmt.Println(err)
+	}
 }

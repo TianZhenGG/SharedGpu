@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"sharedgpu/bdfs"
 	"sharedgpu/db"
 	"sharedgpu/proxy"
 	"sharedgpu/utils"
@@ -28,12 +29,15 @@ import (
 // 定义全局变量
 var (
 	globalFolderPath string
+	globalProject    string
 	globalEditorVim  *widget.Entry
 	globalLeftbottom *fyne.Container
 	globalFilePath   string
 
 	// 定义一个全局的 leftline 变量
 	leftline = widget.NewMultiLineEntry()
+
+	uuidStr string
 )
 
 var importPath string
@@ -42,6 +46,8 @@ var importPath string
 var displayArea *widget.Entry
 
 func init() {
+	machineModel := "MachineModel123"
+	uuidStr = utils.GenerateUUID(machineModel).String()
 	//设置中文字体:解决中文乱码问题
 	fontPaths := findfont.List()
 	for _, path := range fontPaths {
@@ -49,28 +55,6 @@ func init() {
 			os.Setenv("FYNE_FONT", path)
 			break
 		}
-	}
-}
-
-func handleShortcut(editor *widget.Entry, action string) {
-	switch action {
-	case "save":
-		// 保存文件的代码
-
-	case "undo":
-		// 回退代码的代码
-	case "selectAll":
-		keyEvent := &fyne.KeyEvent{Name: fyne.KeyA}
-		editor.TypedKey(keyEvent)
-		if keyEvent.Name == fyne.KeyA {
-			editor.TypedRune(' ')
-		}
-	case "delete":
-		// 删除的代码
-	case "comment":
-		// 批量注释的代码
-	default:
-		fmt.Println("Unknown action:", action)
 	}
 }
 
@@ -344,9 +328,6 @@ func main() {
 	// 创建租用机器和管理数据集的按钮，并设置颜色
 	rentMachineButton := widget.NewButton("出租机器", func() {
 
-		machineModel := "MachineModel123"
-		uuidStr := utils.GenerateUUID(machineModel).String()
-
 		// 根据 uuid 查询是否存在
 		exists, err := rdb.Exists(ctx, uuidStr).Result()
 		if err != nil {
@@ -504,7 +485,32 @@ func main() {
 	})
 
 	executeButton := widget.NewButton("执行", func() {
-		// 按钮的点击事件处理函数
+		// 按钮的点击事件时将globalproject压缩并上传到网盘
+		// 压缩文件夹
+		bdfs.Zipit(globalProject, globalProject+".zip")
+		err = bdfs.CreateDir(uuidStr)
+		if err != nil {
+			fmt.Println("failed to create dir:", err)
+		}
+		// 上传文件夹
+		err = bdfs.Upload(globalProject+".zip", uuidStr)
+		if err != nil {
+			fmt.Println("failed to upload file:", err)
+		}
+		// 删除本地压缩文件
+		err = os.Remove(globalProject + ".zip")
+		if err != nil {
+			fmt.Println("failed to remove file:", err)
+		}
+		// 下载文件夹
+		//get folder from path
+		projectFolder := filepath.Base(globalProject)
+		fmt.Println("globalProject:", projectFolder)
+		err = bdfs.Download(uuidStr, projectFolder+".zip")
+		if err != nil {
+			fmt.Println("failed to download file:", err)
+		}
+
 	})
 	// 竖直布局
 	buttonBox := container.NewVBox(debugButton, executeButton)
@@ -523,11 +529,12 @@ func main() {
 	// 创建一个支持滚动的容器，然后将 editorVim 添加到这个容器中
 	scrollableEditorVim := container.NewHScroll(leftConn)
 
-	// 创建新的显示区域
-	displayArea = widget.NewMultiLineEntry()
-	displayArea.SetPlaceHolder("新的显示区域")
-	displayArea.Wrapping = fyne.TextWrapWord
-	displayArea.Disable()
+	// 创建新的显示区域,可以滚动但是不能编辑
+	// 创建一个新的显示区域
+	label = widget.NewLabel("输出区域")
+
+	// 创建一个可以滚动的容器
+	displayArea := container.NewVScroll(label)
 
 	// 将scrollableEditorVim和displayArea添加到新的HSplit中
 	HSplit := container.NewVSplit(
@@ -556,6 +563,7 @@ func main() {
 
 					// 更新全局变量为选择的路径
 					globalFolderPath = uri.Path()
+					globalProject = uri.Path()
 					globalEditorVim = editorVim
 					//空fyne.Container
 					// 从 leftSplit 中移除旧的 leftbottom 容器
