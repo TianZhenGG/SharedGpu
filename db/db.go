@@ -2,22 +2,48 @@ package db
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/base64"
+	"fmt"
+	"strings"
 
 	"github.com/go-redis/redis/v8"
 )
 
-// 创建一个全局的 Redis 客户端
-var ctx = context.Background()
 var rdb *redis.Client
 
-func InitRedis() (*redis.Client, error) {
+// 加密的地址
+var encryptedAddr = "1vbshUShsWoE6NyjJ9JDTPs=" // 将这里替换为你的加密地址
+
+func decryptAES(key, ciphertext string) (string, error) {
+	block, err := aes.NewCipher([]byte(key))
+	if err != nil {
+		return "", err
+	}
+
+	decodedCiphertext, _ := base64.StdEncoding.DecodeString(ciphertext)
+
+	plaintext := make([]byte, len(decodedCiphertext))
+	stream := cipher.NewCFBDecrypter(block, []byte(key)[:block.BlockSize()])
+	stream.XORKeyStream(plaintext, decodedCiphertext)
+
+	return string(plaintext), nil
+}
+
+func InitRedis(ctx context.Context) (*redis.Client, error) {
+	addr, err := decryptAES("the-key-has-to-be-32-bytes-long!", encryptedAddr)
+	if err != nil {
+		return nil, err
+	}
+
 	rdb = redis.NewClient(&redis.Options{
-		Addr:     "47.96.225.81:6379",
-		Password: "", // 如果没有密码，留空
-		DB:       0,  // 使用默认 DB
+		Addr:     addr,
+		Password: "", // 没有密码
+		DB:       0,
 	})
 
-	_, err := rdb.Ping(ctx).Result()
+	_, err = rdb.Ping(ctx).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -27,26 +53,34 @@ func InitRedis() (*redis.Client, error) {
 
 // hget all key field gpu字段 且status为0
 func HgetallByValue(ctx context.Context, rdb *redis.Client, field string, selectedValue string) ([]string, error) {
-	var keysWithSelectedValue []string
+	var keys []string
 
-	// 获取所有的键
-	keys, _, err := rdb.Scan(ctx, 0, "*", 0).Result()
-	if err != nil {
-		return nil, err
-	}
+	iter := rdb.Scan(ctx, 0, "*", 0).Iterator()
+	for iter.Next(ctx) {
+		key := iter.Val()
 
-	for _, key := range keys {
-		// 获取指定字段的值
+		// 如果 key 的长度小于 36（UUID 的长度），则跳过
+		if len(key) < 36 {
+			continue
+		}
+
 		value, err := rdb.HGet(ctx, key, field).Result()
 		if err != nil {
-			return nil, err
+			fmt.Printf("Error getting field %s for key %s: %v\n", field, key, err)
+			continue
 		}
+		// fmt.Printf("Key: %s, Value: %s\n", key, value)
 
-		// 如果值是 selectedValue将键添加到结果列表
-		if value == selectedValue {
-			keysWithSelectedValue = append(keysWithSelectedValue, key)
+		if strings.Contains(value, selectedValue) {
+
+			keys = append(keys, key)
 		}
 	}
+	if err := iter.Err(); err != nil {
+		fmt.Printf("Error scanning keys: %v\n", err)
+		return nil, err
+	}
+	// fmt.Printf("Keys: %v\n", keys)
 
-	return keysWithSelectedValue, nil
+	return keys, nil
 }

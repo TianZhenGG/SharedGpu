@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-func loginBd(bduss string) error {
+func LoginBd(bduss string) error {
 	if runtime.GOOS == "windows" {
 		cmd := exec.Command("powershell", "bdfs/baidupcs-go.exe", "login", "-bduss=", bduss)
 		err := cmd.Run()
@@ -22,7 +22,7 @@ func loginBd(bduss string) error {
 		}
 		return nil
 	} else {
-		cmd := exec.Command("bdfs/baidupcs-go", "login", "--bduss="+bduss)
+		cmd := exec.Command("bdfs/baidupcs-go", "login", "-bduss="+bduss)
 		err := cmd.Run()
 		if err != nil {
 			return err

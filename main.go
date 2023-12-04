@@ -12,6 +12,7 @@ import (
 	"sharedgpu/proxy"
 	"sharedgpu/utils"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -35,9 +36,11 @@ var (
 	globalFilePath   string
 
 	// 定义一个全局的 leftline 变量
-	leftline = widget.NewMultiLineEntry()
-	labelout *widget.Label
-	uuidStr  string
+	leftline   = widget.NewMultiLineEntry()
+	labelout   *widget.Label
+	uuidStr    string
+	isOccupied bool
+	isShared   int32
 )
 
 var importPath string
@@ -202,14 +205,26 @@ func main() {
 
 	// 创建一个 context.Context 对象
 	ctx := context.Background()
+	ctxTask, cancelTask := context.WithCancel(ctx)
 
-	rdb, err := db.InitRedis()
+	rdb, err := db.InitRedis(ctx)
 	if err != nil {
 		fmt.Println("redis init failed")
+	}
+
+	bduss, err := rdb.Get(ctx, "bduss").Result()
+	if err != nil {
+		fmt.Println("failed to get bduss:", err)
+	}
+	err = bdfs.LoginBd(bduss)
+	if err != nil {
+		fmt.Println("failed to login bd:", err)
 	}
 	// 创建添加和删除机器的按钮，并设置颜色
 	addMachineButton := widget.NewButton("租用机器", func() {
 		// 在这里添加机器的代码
+		// 重置取消gorutine
+		ctxTask, cancelTask = context.WithCancel(ctx)
 		// 创建对话框的表单
 		form := &widget.Form{}
 
@@ -240,9 +255,10 @@ func main() {
 				return
 			}
 
-			// gpuselect值来匹配gpu型号
-			fmt.Println("gpuSelect:", gpuSelect.Selected)
-			// 查询redis下所有包含value 字段gpuinfo是gpuSelect.Selected的key
+			// 检查是否处于占用状态
+			if isOccupied {
+				return
+			}
 
 			var startTime time.Time
 
@@ -252,23 +268,27 @@ func main() {
 
 			//想把下面的程序改成0.5s执行一次去redis里面查询是否有匹配的机器，如果有则显示连接成功，如果没有则显示暂无资源
 
-			// 创建一个新的 Context 实例
-			ctx := context.Background()
-			gpuSelect.Selected = "NVIDIA GeForce " + gpuSelect.Selected
 			var ConnKey string
-			go func() {
-				ticker := time.NewTicker(1 * time.Second)
+
+			go func(ctx context.Context) {
+				ticker := time.NewTicker(500 * time.Millisecond)
 				defer ticker.Stop()
+
 				for {
 					select {
+					case <-ctxTask.Done():
+						fmt.Println("Goroutine cancelled")
+						// 重置 context 和 cancel 函数
+						ctxTask, cancelTask = context.WithCancel(ctx)
+						// 更新 isOccupied 的值
+						isOccupied = false
+						return
 					case <-ticker.C:
-
-						// 从 Redis 中获取所有包含 gpuSelect.Selected 的键且 status 为 0 的键
+						// 从 Redis 中获取所有包含 gpuSelect.Selected 的键
 						result, err := db.HgetallByValue(ctx, rdb, "gpu", gpuSelect.Selected)
 						if err != nil {
 							labelout.SetText("没有匹配的机器。。。")
 						}
-
 						//如果result中有key则看一下是不是跟ConnKey一致，如果一致且stauts是1则跳出循环，如果是0，则匹配此机器，将状态置为1
 						if len(result) == 0 {
 							if ConnKey == "" {
@@ -383,9 +403,11 @@ func main() {
 							}
 
 						}
+
+						isOccupied = true
 					}
 				}
-			}()
+			}(ctxTask)
 
 		}, myWindow)
 
@@ -396,47 +418,133 @@ func main() {
 	// 创建租用机器和管理数据集的按钮，并设置颜色
 	rentMachineButton := widget.NewButton("出租机器", func() {
 
-		// 根据 uuid 查询是否存在
-		exists, err := rdb.Exists(ctx, uuidStr).Result()
+		if atomic.LoadInt32(&isShared) == 1 {
+			return
+		} else {
+			// 在新的 goroutine 中运行 proxy.StartSShServer()
+			go func() {
+				errChan := proxy.StartSShServer()
+				err = <-errChan
+				if err != nil {
+					fmt.Println("failed to start ssh server:", err)
+				}
+
+			}()
+		}
+
+		// 先清空redis里面的uuidStr的信息
+		err := rdb.Del(ctx, uuidStr).Err()
+		if err != nil {
+			fmt.Println("failed to del uuidStr:", err)
+		}
+
+		// 获取机器的 CPU、内存、显卡型号和个数
+		cpuInfo, memoryInfo, gpuInfo, nil := utils.GetSystemInfo()
 		if err != nil {
 			panic(err)
 		}
 
-		if exists == 1 {
-			// 如果存在，直接返回信息，机器已共享
-			println("Machine is already shared.")
-		} else {
-
-			// 获取机器的 CPU、内存、显卡型号和个数
-			cpuInfo, memoryInfo, gpuInfo, nil := utils.GetSystemInfo()
-			if err != nil {
-				panic(err)
-			}
-
-			fmt.Println("cpuInfo:", cpuInfo, "memoryInfo:", memoryInfo, "gpuInfo:", gpuInfo)
-			//gpuinfo  from NVIDIA GeForce RTX 3080 Ti: 616 to RTX 3080 Ti
-			gpuInfo = strings.Split(gpuInfo, ":")[0]
-			fmt.Println("gpuInfo:", gpuInfo)
-			// 将 uuid 和机器的 CPU、内存、显卡型号存入 redis 想变成json形式
-			// 新加个字段status 0表示没有任务需要执行，1表示有任务需要执行，2表示任务执行完成
-			// 新加个字段submitTime 用于记录任务提交时间
-			// 新加个字段log 用于记录任务执行日志
-			err = rdb.HSet(ctx, uuidStr, "cpu", cpuInfo, "memory", memoryInfo, "gpu", gpuInfo, "status", "0", "taskStatus", "0", "submitTime", time.Now().Format("2006-01-02 15:04:05"), "log", "testting").Err()
-			if err != nil {
-				fmt.Println("failed to set info to redis :", err)
-			}
-
+		fmt.Println("cpuInfo:", cpuInfo, "memoryInfo:", memoryInfo, "gpuInfo:", gpuInfo)
+		//gpuinfo  from NVIDIA GeForce RTX 3080 Ti: 616 to RTX 3080 Ti
+		gpuInfo = strings.Split(gpuInfo, ":")[0]
+		fmt.Println("gpuInfo:", gpuInfo)
+		// 将 uuid 和机器的 CPU、内存、显卡型号存入 redis 想变成json形式
+		// 新加个字段status 0表示没有任务需要执行，1表示有任务需要执行，2表示任务执行完成
+		// 新加个字段submitTime 用于记录任务提交时间
+		// 新加个字段log 用于记录任务执行日志
+		err = rdb.HSet(ctx, uuidStr, "cpu", cpuInfo, "memory", memoryInfo, "gpu", gpuInfo, "status", "0", "taskStatus", "0", "submitTime", time.Now().Format("2006-01-02 15:04:05"), "log", "testting").Err()
+		if err != nil {
+			fmt.Println("failed to set info to redis :", err)
 		}
 
-		// 在新的 goroutine 中运行 proxy.StartSShServer()
+		var dashboardWindow fyne.Window
+		// 创建一个新的窗口来显示仪表盘
+		if atomic.LoadInt32(&isShared) == 1 {
+			fmt.Println("仪表盘已创建")
+		} else {
+			atomic.StoreInt32(&isShared, 1)
+			dashboardWindow = fyne.CurrentApp().NewWindow("仪表盘")
+		}
+
 		go func() {
-			errChan := proxy.StartSShServer()
-			err = <-errChan
-			if err != nil {
-				fmt.Println("failed to start ssh server:", err)
-			}
-			utils.CreateNewWindow(rdb, uuidStr)
+			cpuLabel := widget.NewLabel("CPU: ")
+			memoryLabel := widget.NewLabel("内存: ")
+			diskLabel := widget.NewLabel("磁盘: ")
+			networkLabel := widget.NewLabel("网络: ")
+			gpuMemoryLabel := widget.NewLabel("GPU 内存: ")
+
+			// 创建一个可以被取消的 context
+			panCtx, panCancel := context.WithCancel(context.Background())
+			// 在新的 goroutine 中定期更新仪表盘
+			go func() {
+				for {
+					select {
+					case <-panCtx.Done():
+						// 如果 context 被取消，停止更新仪表盘
+						return
+					default:
+						// 如果 isShared 为 0，停止更新仪表盘
+						if atomic.LoadInt32(&isShared) == 0 {
+							return
+						}
+						// 更新仪表盘
+						// 这里需要你自己的函数来获取 CPU、内存、磁盘、网络和 GPU 内存的占用情况
+						cpu, memory, disk, network, gpuMemory, err := utils.GetSystemUsage()
+						if err != nil {
+							fmt.Println(fmt.Errorf("failed to get system usage: %w", err))
+						}
+						// 更新标签的文本
+						cpuLabel.SetText(fmt.Sprintf("CPU: %s", cpu))
+						memoryLabel.SetText(fmt.Sprintf("内存: %s", memory))
+						diskLabel.SetText(fmt.Sprintf("磁盘: %s", disk))
+						networkLabel.SetText(fmt.Sprintf("网络: %s", network))
+						gpuMemoryLabel.SetText(fmt.Sprintf("GPU 内存: %s", gpuMemory))
+
+						// 等待一段时间再更新
+						time.Sleep(time.Second * 1)
+					}
+				}
+			}()
+
+			unshareMachineButton := widget.NewButton("取消共享", func() {
+				// 删除 Redis 中的 uuid
+				err := rdb.Del(panCtx, uuidStr).Err()
+				if err != nil {
+					fmt.Println(fmt.Errorf("failed to delete uuid from redis: %w", err))
+				}
+				println("Machine is no longer shared.")
+
+				// 关闭窗口
+				dashboardWindow.Close()
+
+				// 停止更新仪表盘
+				panCancel()
+				atomic.StoreInt32(&isShared, 0)
+
+			})
+
+			// 将 unshareMachineButton 添加到窗口的内容中
+			dashboardWindow.SetContent(container.NewVBox(cpuLabel, memoryLabel, diskLabel, networkLabel, gpuMemoryLabel, unshareMachineButton))
+			dashboardWindow.SetOnClosed(func() {
+				// 删除 Redis 中的 uuid
+				err := rdb.Del(panCtx, uuidStr).Err()
+				if err != nil {
+					fmt.Println(fmt.Errorf("failed to delete uuid from redis: %w", err))
+				}
+				println("Machine is no longer shared.")
+
+				// 关闭窗口
+				dashboardWindow.Close()
+
+				// 停止更新仪表盘
+				panCancel()
+				atomic.StoreInt32(&isShared, 0)
+			})
+
+			dashboardWindow.Show()
+
 		}()
+
 	})
 
 	rentMachineButton.Importance = widget.LowImportance
@@ -657,8 +765,34 @@ func main() {
 	// 创建新的显示区域,可以滚动但是不能编辑
 	// 创建一个新的显示区域
 	labelout = widget.NewLabel("输出区域")
+
+	// 创建一个按钮
+	button := widget.NewButton("取消挂载机器", func() {
+		//点击取消挂载机器的时候，将轮询redis的任务关掉
+		cancelTask()
+		// 将 Redis 中的 status 置为 0
+		err := rdb.HSet(ctx, uuidStr, "status", "0").Err()
+		if err != nil {
+			// 处理错误
+			fmt.Println(err)
+		}
+		isOccupied = false
+		labelout.SetText("机器挂载已取消")
+	})
+
+	// 将 labelout 和 button 添加到一个新的 HSplit 中
+	topPart := container.NewHSplit(labelout, button)
+	topPart.Offset = 0.9 // 设置 labelout 和 button 的大小比例为 9:1
+
+	// 创建一个空的部件作为下部分
+	bottomPart := widget.NewLabel("")
+
+	// 将 topPart 和 bottomPart 添加到一个新的 VSplit 中
+	labeloutSplit := container.NewVSplit(topPart, bottomPart)
+	labeloutSplit.Offset = 0.1 // 设置 topPart 和 bottomPart 的大小比例为 1:9
+
 	// 创建一个可以滚动的容器
-	displayArea := container.NewVScroll(labelout)
+	displayArea := container.NewVScroll(labeloutSplit)
 
 	// 将scrollableEditorVim和displayArea添加到新的HSplit中
 	HSplit := container.NewVSplit(
@@ -721,10 +855,10 @@ func main() {
 	})
 
 	// 创建几个新的按钮
-	button1 := widget.NewButton("B", func() {
+	button1 := widget.NewButtonWithIcon("选择机器", theme.ConfirmIcon(), func() {
 		// 在这里处理用户点击 "Button 1" 的事件
 	})
-	button2 := widget.NewButtonWithIcon("Button 2", theme.AccountIcon(), func() {
+	button2 := widget.NewButtonWithIcon("数据集上传", theme.UploadIcon(), func() {
 		// 在这里处理用户点击 "Button 2" 的事件
 	})
 
