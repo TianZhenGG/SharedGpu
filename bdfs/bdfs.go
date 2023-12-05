@@ -9,7 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sharedgpu/utils"
+
+	// "sharedgpu/utils"
 	"strings"
 )
 
@@ -228,11 +229,17 @@ func main() {
 	// if err != nil {
 	// 	fmt.Println(err)
 	// }
-	machineModel := "MachineModel123"
-	uuidStr := utils.GenerateUUID(machineModel).String()
-	fmt.Println(uuidStr)
-	err := Download(uuidStr, "SharedGpu.zip")
+	// machineModel := "MachineModel123"
+	// uuidStr := utils.GenerateUUID(machineModel).String()
+	// fmt.Println(uuidStr)
+	// err := Download("miniconda", "miniconda.zip")
+	// if err != nil {
+	// 	fmt.Println(err)
+	// }
+
+	// 解压文件
+	err := Unzip("miniconda.zip", "./")
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println("failed to unzip file:", err)
 	}
 }

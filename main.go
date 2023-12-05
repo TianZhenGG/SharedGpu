@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sharedgpu/bdfs"
 	"sharedgpu/db"
@@ -36,11 +37,14 @@ var (
 	globalFilePath   string
 
 	// 定义一个全局的 leftline 变量
-	leftline   = widget.NewMultiLineEntry()
-	labelout   *widget.Label
-	uuidStr    string
-	isOccupied bool
-	isShared   int32
+	leftline       = widget.NewMultiLineEntry()
+	labelout       *widget.Label
+	bottomPart     *widget.Label
+	uuidStr        string
+	isOccupied     bool
+	isShared       int32
+	mountedMachine []string
+	selectedValue  string
 )
 
 var importPath string
@@ -220,6 +224,9 @@ func main() {
 	if err != nil {
 		fmt.Println("failed to login bd:", err)
 	}
+	// 挂载本地机器
+	mountedMachine = append(mountedMachine, "local")
+
 	// 创建添加和删除机器的按钮，并设置颜色
 	addMachineButton := widget.NewButton("租用机器", func() {
 		// 在这里添加机器的代码
@@ -331,6 +338,7 @@ func main() {
 
 										// 显示连接成功和时间差还有gpu相关信息
 										labelout.SetText(fmt.Sprintf("连接成功，已连接：%d天%d小时%d分钟%d秒，\nGPU:%s", days, hours, minutes, seconds, gpuSelect.Selected))
+										mountedMachine = append(mountedMachine, gpuSelect.Selected)
 										continue
 									}
 									// 如果 status 为 0，匹配此机器，并将状态置为 1
@@ -339,6 +347,8 @@ func main() {
 										if err != nil {
 
 											labelout.SetText("重新匹配机器成功。。。")
+											mountedMachine = append(mountedMachine, gpuSelect.Selected)
+
 										}
 										ConnKey = key
 
@@ -394,6 +404,7 @@ func main() {
 											}
 										}()
 										labelout.SetText("匹配机器成功。。。")
+										mountedMachine = append(mountedMachine, gpuSelect.Selected)
 									}
 									if status == "1" {
 										startTime = time.Now()
@@ -669,81 +680,128 @@ func main() {
 	})
 
 	executeButton := widget.NewButton("执行", func() {
-		// 按钮的点击事件时将globalproject压缩并上传到网盘
-		//清空网盘文件夹
-		err := bdfs.DeleteDir(uuidStr)
-		if err != nil {
-			fmt.Println("failed to delete dir:", err)
+		if selectedValue == "" {
+			labelout.SetText("请选择机器")
+			return
 		}
-		labelout.SetText("清空网盘任务。。。")
-		// 压缩文件夹
-		bdfs.Zipit(globalProject, globalProject+".zip")
-		err = bdfs.CreateDir(uuidStr)
-		if err != nil {
-			fmt.Println("failed to create dir:", err)
-		}
-		labelout.SetText("压缩文件夹。。。")
 
-		// 上传文件夹
-		err = bdfs.Upload(globalProject+".zip", uuidStr)
-		if err != nil {
-			fmt.Println("failed to upload file:", err)
-		}
-		labelout.SetText("上传文件夹。。。")
-		// 删除本地压缩文件
-		err = os.Remove(globalProject + ".zip")
-		if err != nil {
-			fmt.Println("failed to remove file:", err)
-		}
-		// 更新redis uuid 下的任务状态为有任务需要执行，并将提交时间更新为当前时间
-		err = rdb.HSet(ctx, uuidStr, "taskStatus", "1", "log", "testing", "submitTime", time.Now().Format("2006-01-02 15:04:05")).Err()
-		if err != nil {
-			fmt.Println("failed to set info to redis :", err)
-		}
-		//不停的轮询redis uuid 下的任务状态，如果为2，则下载文件夹
-		for {
-			// 获取任务状态
-			status, err := rdb.HGet(ctx, uuidStr, "taskStatus").Result()
+		if selectedValue == "local" {
+			// 执行本地机器的代码
+			err = bdfs.Download("miniconda", "miniconda.zip")
 			if err != nil {
-				fmt.Println("failed to get status:", err)
+				fmt.Println("failed to download file:", err)
 			}
-			time.Sleep(time.Second * 2)
-			if status == "2" {
-				projectFolder := filepath.Base(globalProject)
-				err = bdfs.Download(uuidStr, projectFolder+".zip")
+			//project目录下有没有.BaiduPCS-Go-downloading结尾的文件，如果有则等待，如果没有则解压文件
+			for {
+				files, err := ioutil.ReadDir(globalProject)
 				if err != nil {
-					fmt.Println("failed to download file:", err)
+					fmt.Println("failed to read dir:", err)
 				}
-				labelout.SetText("任务执行完成，获取结果。。。")
-				// 获取执行日志
-				log, err := rdb.HGet(ctx, uuidStr, "log").Result()
+				downloading := false
+				for _, f := range files {
+					if strings.HasSuffix(f.Name(), ".BaiduPCS-Go-downloading") {
+						time.Sleep(time.Second * 2)
+						downloading = true
+						break
+					}
+				}
+				if downloading {
+					continue
+				}
+
+				// 解压文件
+				fmt.Println("解压文件", globalProject)
+				err = bdfs.Unzip("miniconda.zip", globalProject)
 				if err != nil {
-					fmt.Println("failed to get log:", err)
+					fmt.Println("failed to unzip file:", err)
 				}
-				labelout.SetText(log)
-
-				// // 确保下载操作已完成
-				// time.Sleep(time.Second * 5)
-
-				// // 解压文件
-				// err = bdfs.Unzip(projectFolder+".zip", globalProject)
-				// if err != nil {
-				// 	fmt.Println("failed to unzip file:", err)
-				// }
-
-				// // 确保解压操作已完成
-				// time.Sleep(time.Second * 5)
-
-				// // 删除本地压缩文件
-				// err = os.Remove(projectFolder + ".zip")
-				// if err != nil {
-				// 	fmt.Println("failed to remove file:", err)
-				// }
-
+				break
+			}
+			// 执行代码 ./miniconda/python.exe ./project/test.py
+			cmd := exec.Command(globalProject+"/miniconda/python.exe", globalProject+"/test.py")
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				fmt.Println("Failed to execute command:", err)
 				return
 			}
-		}
+			fmt.Println(string(output))
+			// bottomPart.SetText(string(output))
 
+		} else {
+
+			err := bdfs.DeleteDir(uuidStr)
+			if err != nil {
+				fmt.Println("failed to delete dir:", err)
+			}
+			labelout.SetText("清空网盘任务。。。")
+			// 压缩文件夹
+			bdfs.Zipit(globalProject, globalProject+".zip")
+			err = bdfs.CreateDir(uuidStr)
+			if err != nil {
+				fmt.Println("failed to create dir:", err)
+			}
+			labelout.SetText("压缩文件夹。。。")
+
+			// 上传文件夹
+			err = bdfs.Upload(globalProject+".zip", uuidStr)
+			if err != nil {
+				fmt.Println("failed to upload file:", err)
+			}
+			labelout.SetText("上传文件夹。。。")
+			// 删除本地压缩文件
+			err = os.Remove(globalProject + ".zip")
+			if err != nil {
+				fmt.Println("failed to remove file:", err)
+			}
+			// 更新redis uuid 下的任务状态为有任务需要执行，并将提交时间更新为当前时间
+			err = rdb.HSet(ctx, uuidStr, "taskStatus", "1", "log", "testing", "submitTime", time.Now().Format("2006-01-02 15:04:05")).Err()
+			if err != nil {
+				fmt.Println("failed to set info to redis :", err)
+			}
+			//不停的轮询redis uuid 下的任务状态，如果为2，则下载文件夹
+			for {
+				// 获取任务状态
+				status, err := rdb.HGet(ctx, uuidStr, "taskStatus").Result()
+				if err != nil {
+					fmt.Println("failed to get status:", err)
+				}
+				time.Sleep(time.Second * 2)
+				if status == "1" {
+					projectFolder := filepath.Base(globalProject)
+					err = bdfs.Download(uuidStr, projectFolder+".zip")
+					if err != nil {
+						fmt.Println("failed to download file:", err)
+					}
+					labelout.SetText("任务执行完成，获取结果。。。")
+					// 获取执行日志
+					log, err := rdb.HGet(ctx, uuidStr, "log").Result()
+					if err != nil {
+						fmt.Println("failed to get log:", err)
+					}
+					labelout.SetText(log)
+
+					// // 确保下载操作已完成
+					// time.Sleep(time.Second * 5)
+
+					// // 解压文件
+					// err = bdfs.Unzip(projectFolder+".zip", globalProject)
+					// if err != nil {
+					// 	fmt.Println("failed to unzip file:", err)
+					// }
+
+					// // 确保解压操作已完成
+					// time.Sleep(time.Second * 5)
+
+					// // 删除本地压缩文件
+					// err = os.Remove(projectFolder + ".zip")
+					// if err != nil {
+					// 	fmt.Println("failed to remove file:", err)
+					// }
+
+					return
+				}
+			}
+		}
 	})
 	// 竖直布局
 	buttonBox := container.NewVBox(debugButton, executeButton)
@@ -765,7 +823,8 @@ func main() {
 	// 创建新的显示区域,可以滚动但是不能编辑
 	// 创建一个新的显示区域
 	labelout = widget.NewLabel("输出区域")
-
+	// 创建一个空的部件作为下部分
+	bottomPart := widget.NewLabel("")
 	// 创建一个按钮
 	button := widget.NewButton("取消挂载机器", func() {
 		//点击取消挂载机器的时候，将轮询redis的任务关掉
@@ -783,9 +842,6 @@ func main() {
 	// 将 labelout 和 button 添加到一个新的 HSplit 中
 	topPart := container.NewHSplit(labelout, button)
 	topPart.Offset = 0.9 // 设置 labelout 和 button 的大小比例为 9:1
-
-	// 创建一个空的部件作为下部分
-	bottomPart := widget.NewLabel("")
 
 	// 将 topPart 和 bottomPart 添加到一个新的 VSplit 中
 	labeloutSplit := container.NewVSplit(topPart, bottomPart)
@@ -856,8 +912,35 @@ func main() {
 
 	// 创建几个新的按钮
 	button1 := widget.NewButtonWithIcon("选择机器", theme.ConfirmIcon(), func() {
-		// 在这里处理用户点击 "Button 1" 的事件
+
+		// 创建一个新的窗口
+		var newWindow fyne.Window
+
+		// 创建一个存储机器名的切片
+		machineNames := make([]string, len(mountedMachine))
+		for i, machine := range mountedMachine {
+			machineNames[i] = machine // 直接使用 machine 作为机器名
+		}
+
+		// 创建一个 RadioGroup
+		radio := widget.NewRadioGroup(machineNames, func(machineName string) {
+			if machineName != "" {
+				fmt.Println("Selected machine:", machineName)
+				selectedValue = machineName // 更新 selectedValue 的值
+				newWindow.Hide()            // 隐藏窗口
+			}
+		})
+
+		if newWindow != nil {
+			newWindow.Close() // 关闭旧的窗口
+		}
+		newWindow = fyne.CurrentApp().NewWindow("选择机器") // 创建新的窗口
+		newWindow.Resize(fyne.NewSize(100, 400))
+		newWindow.SetContent(radio)
+		newWindow.Show()
+
 	})
+
 	button2 := widget.NewButtonWithIcon("数据集上传", theme.UploadIcon(), func() {
 		// 在这里处理用户点击 "Button 2" 的事件
 	})
