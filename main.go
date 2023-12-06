@@ -450,6 +450,9 @@ func main() {
 			}()
 		}
 
+		machineModel := "MachineModel123"
+		uuidStr = utils.GenerateUUID(machineModel).String()
+
 		// 先清空redis里面的uuidStr的信息
 		err := rdb.Del(ctx, uuidStr).Err()
 		if err != nil {
