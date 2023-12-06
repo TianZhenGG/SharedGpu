@@ -68,14 +68,14 @@ func DeleteDir(remoteDir string) error {
 	}
 }
 
-func Download(remoteDir, remoteFile string) error {
+func Download(remoteDir, remoteFile string, savepath string) error {
 	// 创建一个新的 Context 实例
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// 如果是 windows
 	if runtime.GOOS == "windows" {
-		cmd := exec.CommandContext(ctx, "powershell", "bdfs/baidupcs-go.exe", "d  --ow --status --save -p 20 -l 20", remoteDir+"/"+remoteFile)
+		cmd := exec.CommandContext(ctx, "powershell", "bdfs/baidupcs-go.exe", "d  --ow --status --saveto", savepath, "-p 20 -l 20", remoteDir+"/"+remoteFile)
 		err := cmd.Run()
 		if err != nil {
 			return err
