@@ -4,14 +4,15 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"fmt"
+	"os/exec"
+	"strings"
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/shirou/gopsutil/cpu"
 	"github.com/shirou/gopsutil/disk"
 	"github.com/shirou/gopsutil/mem"
 	"github.com/shirou/gopsutil/net"
-	"os/exec"
-	"strings"
-	"time"
 )
 
 func GenerateUUID(machineModel string) uuid.UUID {

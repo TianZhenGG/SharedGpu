@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"image/color"
@@ -37,14 +38,15 @@ var (
 	globalFilePath   string
 
 	// 定义一个全局的 leftline 变量
-	leftline       = widget.NewMultiLineEntry()
-	labelout       *widget.Label
-	bottomPart     *widget.Label
-	uuidStr        string
-	isOccupied     bool
-	isShared       int32
-	mountedMachine []string
-	selectedValue  string
+	leftline          = widget.NewMultiLineEntry()
+	labelout          *widget.Label
+	bottomPart        *widget.Label
+	uuidStr           string
+	isOccupied        bool
+	isShared          int32
+	mountedMachine    []string
+	selectedValue     string
+	selectmachineName string
 )
 
 var importPath string
@@ -556,6 +558,74 @@ func main() {
 
 		}()
 
+		//创建一个新的循环线程去不停的轮询uuidStr下的任务状况,当taskStatus为1时则执行运行代码
+		go func() {
+			for {
+				// 轮询 uuidStr 下的任务状态
+				taskStatus, err := rdb.HGet(ctx, uuidStr, "status").Result()
+				if err != nil {
+					// 处理错误
+					fmt.Println(err)
+					continue
+				}
+
+				// 当 taskStatus 为 "1" 时，执行运行代码
+				if taskStatus == "1" {
+					// 这里添加你的运行代码
+					// 先下载代码和配置环境到本地tmp目录下面
+					// 从网盘uuidStr目录下下载代码和环境
+					// 执行本地机器的代码
+					err = bdfs.Download(uuidStr, "")
+					if err != nil {
+						fmt.Println("failed to download file:", err)
+					}
+					//获取当前目录
+					currentDir, err := os.Getwd()
+					if err != nil {
+						fmt.Println("failed to get current dir:", err)
+					}
+
+					//project目录下有没有.BaiduPCS-Go-downloading结尾的文件，如果有则等待，如果没有则解压文件
+					for {
+						files, err := ioutil.ReadDir(currentDir)
+						if err != nil {
+							fmt.Println("failed to read dir:", err)
+						}
+						downloading := false
+						for _, f := range files {
+							if strings.HasSuffix(f.Name(), ".BaiduPCS-Go-downloading") {
+								time.Sleep(time.Second * 2)
+								downloading = true
+								break
+							}
+						}
+						if downloading {
+							continue
+						}
+
+						for _, f := range files {
+							if strings.HasSuffix(f.Name(), ".zip") {
+								err = bdfs.Unzip(f.Name(), "")
+								if err != nil {
+									fmt.Println("failed to unzip file:", err)
+									// 这里添加你的错误处理代码
+									// 例如，删除这个文件：
+									// os.Remove(f.Name())
+									// 或者，将这个文件移动到一个特定的目录：
+									// os.Rename(f.Name(), "/path/to/directory/" + f.Name())
+								}
+							}
+						}
+						break
+					}
+
+				}
+
+				// 等待一段时间再进行下一次轮询
+				time.Sleep(time.Second)
+			}
+		}()
+
 	})
 
 	rentMachineButton.Importance = widget.LowImportance
@@ -664,10 +734,10 @@ func main() {
 	leftbottom.Add(label)
 	//设置leftbottom的字体大小
 
-	output := widget.NewMultiLineEntry()
-	output.SetPlaceHolder("键入命令")
-	output.Wrapping = fyne.TextWrapWord
-	output.Enable()
+	bottomInput := widget.NewMultiLineEntry()
+	bottomInput.SetPlaceHolder("键入命令")
+	bottomInput.Wrapping = fyne.TextWrapWord
+	bottomInput.Enable()
 
 	// 创建中间的编辑器
 	editorVim := widget.NewMultiLineEntry()
@@ -686,47 +756,103 @@ func main() {
 		}
 
 		if selectedValue == "local" {
-			// 执行本地机器的代码
-			err = bdfs.Download("miniconda", "miniconda.zip")
-			if err != nil {
-				fmt.Println("failed to download file:", err)
-			}
-			//project目录下有没有.BaiduPCS-Go-downloading结尾的文件，如果有则等待，如果没有则解压文件
-			for {
-				files, err := ioutil.ReadDir(globalProject)
-				if err != nil {
-					fmt.Println("failed to read dir:", err)
-				}
-				downloading := false
-				for _, f := range files {
-					if strings.HasSuffix(f.Name(), ".BaiduPCS-Go-downloading") {
-						time.Sleep(time.Second * 2)
-						downloading = true
-						break
-					}
-				}
-				if downloading {
-					continue
-				}
-
-				// 解压文件
-				fmt.Println("解压文件", globalProject)
-				err = bdfs.Unzip("miniconda.zip", globalProject)
-				if err != nil {
-					fmt.Println("failed to unzip file:", err)
-				}
-				break
-			}
-			// 执行代码 ./miniconda/python.exe ./project/test.py
-			cmd := exec.Command(globalProject+"/miniconda/python.exe", globalProject+"/test.py")
-			output, err := cmd.CombinedOutput()
-			if err != nil {
-				fmt.Println("Failed to execute command:", err)
+			inputText := bottomInput.Text
+			// 如果输入框为空，则不执行任何操作
+			if inputText == "" {
+				bottomPart.SetText("请输入命令。。。")
 				return
 			}
-			fmt.Println(string(output))
-			// bottomPart.SetText(string(output))
+			//清空bottomInput
+			bottomInput.SetText("")
 
+			//解析输入的文本，如果是python或者是python3，改成miniconda/python.exe
+			// 解析输入的文本，如果是python或者是python3，改成miniconda/python.exe
+			inputText = strings.Replace(inputText, "python ", "miniconda/python.exe ", -1)
+			inputText = strings.Replace(inputText, "python3 ", "miniconda/python.exe ", -1)
+			inputText = strings.Replace(inputText, "pip ", "miniconda/python.exe -m pip ", -1)
+			inputText = strings.Replace(inputText, "pip3 ", "miniconda/python.exe -m pip ", -1)
+
+			//如果本地没有miniconda，则下载miniconda
+			if _, err := os.Stat("miniconda"); os.IsNotExist(err) {
+				bottomPart.SetText("正在配置环境，请稍等。。。")
+				// 执行本地机器的代码
+				err = bdfs.Download("miniconda", "miniconda.zip")
+				if err != nil {
+					fmt.Println("failed to download file:", err)
+				}
+				//project目录下有没有.BaiduPCS-Go-downloading结尾的文件，如果有则等待，如果没有则解压文件
+				for {
+
+					files, err := ioutil.ReadDir(globalProject)
+					if err != nil {
+						fmt.Println("failed to read dir:", err)
+					}
+					downloading := false
+					for _, f := range files {
+						if strings.HasSuffix(f.Name(), ".BaiduPCS-Go-downloading") {
+							time.Sleep(time.Second * 2)
+							downloading = true
+							break
+						}
+					}
+					if downloading {
+						continue
+					}
+
+					// 解压文件
+					fmt.Println("解压文件", globalProject)
+					err = bdfs.Unzip("miniconda.zip", globalProject)
+					if err != nil {
+						fmt.Println("failed to unzip file:", err)
+					}
+					break
+				}
+
+			}
+
+			// 切分 bottomInput.Text
+			args := strings.Fields(inputText)
+
+			//想将下面的执行改成边执行，边向bottomPart输出
+			// 执行你的命令
+			cmd := exec.Command(args[0], args[1:]...)
+
+			// 获取命令的输出
+			stdout, err := cmd.StdoutPipe()
+			if err != nil {
+				bottomPart.SetText(err.Error())
+			}
+			stderr, err := cmd.StderrPipe()
+			if err != nil {
+				bottomPart.SetText(err.Error())
+			}
+
+			// 创建一个新的 scanner 来读取命令的输出
+			outScanner := bufio.NewScanner(stdout)
+			errScanner := bufio.NewScanner(stderr)
+
+			// 使用一个 goroutine 来读取命令的输出
+			go func() {
+				for outScanner.Scan() {
+					bottomPart.SetText(bottomPart.Text + outScanner.Text() + "\n")
+				}
+			}()
+			go func() {
+				for errScanner.Scan() {
+					bottomPart.SetText(bottomPart.Text + errScanner.Text() + "\n")
+				}
+			}()
+
+			// 运行命令
+			err = cmd.Start()
+			if err != nil {
+				// 如果运行命令失败，显示错误信息
+				bottomPart.SetText(err.Error())
+			}
+			err = cmd.Wait()
+			if err != nil {
+				bottomPart.SetText(err.Error())
+			}
 		} else {
 
 			err := bdfs.DeleteDir(uuidStr)
@@ -807,7 +933,7 @@ func main() {
 	buttonBox := container.NewVBox(debugButton, executeButton)
 
 	newBottom := container.NewHSplit(
-		output,
+		bottomInput,
 		buttonBox,
 	)
 
@@ -824,7 +950,7 @@ func main() {
 	// 创建一个新的显示区域
 	labelout = widget.NewLabel("输出区域")
 	// 创建一个空的部件作为下部分
-	bottomPart := widget.NewLabel("")
+	bottomPart = widget.NewLabel("")
 	// 创建一个按钮
 	button := widget.NewButton("取消挂载机器", func() {
 		//点击取消挂载机器的时候，将轮询redis的任务关掉
@@ -834,6 +960,18 @@ func main() {
 		if err != nil {
 			// 处理错误
 			fmt.Println(err)
+
+		}
+		// 如果 mountedMachine 的长度大于1，才执行删除操作
+		if len(mountedMachine) > 1 {
+			//将mountmachine中的机器去掉
+			for i, machine := range mountedMachine {
+				if machine == selectmachineName {
+					// 删除这个机器
+					mountedMachine = append(mountedMachine[:i], mountedMachine[i+1:]...)
+					break
+				}
+			}
 		}
 		isOccupied = false
 		labelout.SetText("机器挂载已取消")
@@ -910,12 +1048,9 @@ func main() {
 		customDialog.Show()
 	})
 
-	// 创建几个新的按钮
-	button1 := widget.NewButtonWithIcon("选择机器", theme.ConfirmIcon(), func() {
+	button1 := widget.NewButtonWithIcon("选择机器", theme.ConfirmIcon(), nil)
 
-		// 创建一个新的窗口
-		var newWindow fyne.Window
-
+	button1.OnTapped = func() {
 		// 创建一个存储机器名的切片
 		machineNames := make([]string, len(mountedMachine))
 		for i, machine := range mountedMachine {
@@ -925,21 +1060,25 @@ func main() {
 		// 创建一个 RadioGroup
 		radio := widget.NewRadioGroup(machineNames, func(machineName string) {
 			if machineName != "" {
-				fmt.Println("Selected machine:", machineName)
-				selectedValue = machineName // 更新 selectedValue 的值
-				newWindow.Hide()            // 隐藏窗口
+				// 在这里处理选中的机器名
+				//将选中的机器名赋值给selectedValue
+				selectedValue = machineName
+				selectmachineName = machineName
 			}
 		})
 
-		if newWindow != nil {
-			newWindow.Close() // 关闭旧的窗口
-		}
-		newWindow = fyne.CurrentApp().NewWindow("选择机器") // 创建新的窗口
-		newWindow.Resize(fyne.NewSize(100, 400))
-		newWindow.SetContent(radio)
-		newWindow.Show()
+		// 创建一个新的弹出覆盖式窗口
+		popUpContent := fyne.NewContainerWithLayout(layout.NewVBoxLayout(), radio) // 使用 RadioGroup 作为弹出窗口的内容
+		canvas := fyne.CurrentApp().Driver().CanvasForObject(button1)
+		popUp := widget.NewPopUp(popUpContent, canvas)
 
-	})
+		// 设置弹出窗口的大小和位置
+		popUp.Resize(fyne.NewSize(200, canvas.Size().Height)) // 设置弹出窗口的宽度为200，高度为画布的高度
+		popUp.Move(fyne.NewPos(0, 0))                         // 将弹出窗口移动到画布的左上角
+
+		// 显示弹出覆盖式窗口
+		popUp.Show()
+	}
 
 	button2 := widget.NewButtonWithIcon("数据集上传", theme.UploadIcon(), func() {
 		// 在这里处理用户点击 "Button 2" 的事件
