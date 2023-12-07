@@ -135,6 +135,11 @@ func Zipit(source, target string) error {
 			return err
 		}
 
+		// 如果当前路径是 "miniconda"，则跳过这个路径
+		if info.IsDir() && info.Name() == "miniconda" {
+			return filepath.SkipDir
+		}
+
 		// 如果文件或文件夹的名称以 "." 开头，跳过它
 		if strings.HasPrefix(filepath.Base(path), ".") {
 			if info.IsDir() {
@@ -187,6 +192,9 @@ func Unzip(archive, target string) error {
 	if err != nil {
 		return err
 	}
+
+	// 确保在函数返回时关闭 reader
+	defer reader.Close()
 
 	if err := os.MkdirAll(target, 0755); err != nil {
 		return err
