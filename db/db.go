@@ -13,8 +13,8 @@ import (
 
 var rdb *redis.Client
 
-// 加密的地址
 var encryptedAddr = "1vbshUShsWoE6NyjJ9JDTPs=" // 将这里替换为你的加密地址
+var secretAddr = "uKmzjka2sm4A"                // 将这里替换为你的明文地址
 
 func decryptAES(key, ciphertext string) (string, error) {
 	block, err := aes.NewCipher([]byte(key))
@@ -37,9 +37,14 @@ func InitRedis(ctx context.Context) (*redis.Client, error) {
 		return nil, err
 	}
 
+	sercret, err := decryptAES("the-key-has-to-be-32-bytes-long!", secretAddr)
+	if err != nil {
+		return nil, err
+	}
+
 	rdb = redis.NewClient(&redis.Options{
 		Addr:     addr,
-		Password: "", // 没有密码
+		Password: sercret, // 没有密码
 		DB:       0,
 	})
 

@@ -818,8 +818,6 @@ func main() {
 
 	// 创建中间的编辑器
 	editorVim := widget.NewMultiLineEntry()
-	editorVim.SetPlaceHolder("")
-	editorVim.Wrapping = fyne.TextWrapWord
 
 	// 创建新的按钮
 	debugButton := widget.NewButton("GPT", func() {
@@ -1066,7 +1064,6 @@ func main() {
 
 	// 调整中间编辑器的位置
 	editorVimSplit.Offset = 0.9
-
 	// 创建一个新的 Split 来包含 leftMenu 和 leftSplit
 	menuSplit := container.NewHSplit(leftMenu, leftSplit)
 	menuSplit.Offset = 0.9 // 调整宽度，使左侧菜单更窄
@@ -1077,4 +1074,10 @@ func main() {
 
 	myWindow.SetContent(mainSplit)
 	myWindow.ShowAndRun()
+	// 获取 editorVim 所在的 Canvas
+	canvas := fyne.CurrentApp().Driver().CanvasForObject(editorVim)
+
+	// 调用 HandleShortcuts 函数
+	utils.HandleShortcuts(editorVim, canvas, globalFilePath)
+
 }
