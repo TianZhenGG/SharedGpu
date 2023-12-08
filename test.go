@@ -1,44 +1,62 @@
 package main
 
 import (
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/widget"
-	"github.com/pratikms/fyne-syntax/go"
+	"fmt"
+	"log"
+
+	"github.com/fsnotify/fsnotify"
 )
 
-// createEditorWindow creates a new Fyne window with a text editor widget.
-func createEditorWindow() fyne.Window {
-	// Create a new Fyne application
-	myApp := app.New()
+var changedFile []string
 
-	// Create a new window
-	myWindow := myApp.NewWindow("Go Text Editor")
+func ListenFsNotify(globalProject string, changedFile []string) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer watcher.Close()
 
-	// Create a new text editor widget
-	editor := widget.NewMultiLineEntry()
+	done := make(chan bool)
+	go func() {
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				if event.Op&fsnotify.Write == fsnotify.Write {
+					// 检查 event.Name 是否已经存在于 changedFile 中
+					exists := false
+					for _, file := range changedFile {
+						if file == event.Name {
+							exists = true
+							break
+						}
+					}
 
-	// Set the text editor's placeholder text
-	editor.SetPlaceHolder("Start typing your Go code here...")
+					// 如果 event.Name 不存在于 changedFile 中，将其添加到 changedFile
+					if !exists {
+						changedFile = append(changedFile, event.Name)
+					}
+					fmt.Println(changedFile)
+				}
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				log.Println("error:", err)
+			}
+		}
+	}()
 
-	// Enable syntax highlighting for Go keywords
-	syntaxStyle := fyne_syntax.NewGoSyntaxStyle()
-	editor.AddStyle(syntaxStyle)
-
-	// Create a container to hold the text editor widget
-	content := container.NewVBox(editor)
-
-	// Set the content of the window to the container
-	myWindow.SetContent(content)
-
-	return myWindow
+	err = watcher.Add(globalProject)
+	if err != nil {
+		log.Fatal(err)
+	}
+	<-done
 }
 
 func main() {
-	// Create a new Fyne window with a text editor
-	window := createEditorWindow()
-
-	// Show the window
-	window.ShowAndRun()
+	globalProject := "./"
+	ListenFsNotify(globalProject, changedFile)
 }

@@ -25,6 +25,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"github.com/flopp/go-findfont"
+	"github.com/fsnotify/fsnotify"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -47,6 +48,8 @@ var (
 	mountedMachine    []string
 	selectedValue     string
 	selectmachineName string
+	changedFile       []string
+	quit              chan bool
 )
 
 var importPath string
@@ -65,6 +68,56 @@ func init() {
 			break
 		}
 	}
+}
+
+func ListenFsNotify(globalProject string, changedFile *[]string, quit chan bool) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer watcher.Close()
+
+	done := make(chan bool)
+	go func() {
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				if event.Op&fsnotify.Write == fsnotify.Write {
+					// 检查 event.Name 是否已经存在于 changedFile 中
+					exists := false
+					for _, file := range *changedFile {
+						if file == event.Name {
+							exists = true
+							break
+						}
+					}
+
+					// 如果 event.Name 不存在于 changedFile 中，将其添加到 changedFile
+					if !exists {
+						*changedFile = append(*changedFile, event.Name)
+					}
+					fmt.Println(changedFile)
+				}
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				log.Println("error:", err)
+			case <-quit:
+				// 当 quit 通道关闭时，退出循环
+				return
+			}
+		}
+	}()
+
+	err = watcher.Add(globalProject)
+	if err != nil {
+		log.Fatal(err)
+	}
+	<-done
 }
 
 func readFile(currentFilePath string, editorVim *widget.Entry) {
@@ -472,7 +525,7 @@ func main() {
 		// 新加个字段status 0表示没有任务需要执行，1表示有任务需要执行，2表示任务执行完成
 		// 新加个字段submitTime 用于记录任务提交时间
 		// 新加个字段log 用于记录任务执行日志
-		err = rdb.HSet(ctx, uuidStr, "cpu", cpuInfo, "memory", memoryInfo, "gpu", gpuInfo, "status", "0", "taskStatus", "0", "submitTime", time.Now().Format("2006-01-02 15:04:05"), "log", "testting").Err()
+		err = rdb.HSet(ctx, uuidStr, "cpu", cpuInfo, "memory", memoryInfo, "gpu", gpuInfo, "status", "0", "taskStatus", "0", "log", "testting").Err()
 		if err != nil {
 			fmt.Println("failed to set info to redis :", err)
 		}
@@ -581,6 +634,9 @@ func main() {
 
 					//获取当前目录
 					currentDir, err := os.Getwd()
+					if err != nil {
+						fmt.Println("failed to get cwd:", err)
+					}
 					// 这里添加你的运行代码
 					// 先下载代码和配置环境到本地tmp目录下面
 					// 从网盘uuidStr目录下下载代码和环境
@@ -683,12 +739,24 @@ func main() {
 						fmt.Println("failed to remove dir:", err)
 					}
 
-					// 如果一致则不需要更新，如果不一致则需要更新
-					if duration.Seconds() == 0 {
-						//删除uuidStr下的压缩包
-						err = bdfs.DeleteDir(uuidStr)
+					// 如果不一致则更新
+					if duration.Seconds() != 0 {
+						// 从redis获取changedFile
+						changedFileStr, err := rdb.HGet(ctx, uuidStr, "changedFile").Result()
 						if err != nil {
-							fmt.Println("failed to delete dir:", err)
+							log.Fatal(err)
+						}
+						// string changedFileStr to []sting
+						changedFile := strings.Split(changedFileStr, ", ")
+						// 如果changedFile不是空的则下载文件到当前目录
+						if len(changedFile) != 0 {
+							// 使用 range 关键字遍历字符串切片
+							for _, filename := range changedFile {
+								err := bdfs.Download(uuidStr, filename, "./")
+								if err != nil {
+									log.Fatal(err)
+								}
+							}
 						}
 					}
 
@@ -833,36 +901,67 @@ func main() {
 		if selectedValue == "local" {
 			utils.ExecCommand(selectedValue, bottomInput, bottomPart, globalProject, uuidStr, rdb)
 		} else {
-			err := bdfs.DeleteDir(uuidStr)
-			if err != nil {
-				fmt.Println("failed to delete dir:", err)
-			}
-			bottomPart.SetText("清空网盘任务。。。")
-			// 压缩文件夹
-			bdfs.Zipit(globalProject, globalProject+".zip")
-			err = bdfs.CreateDir(uuidStr)
-			if err != nil {
-				fmt.Println("failed to create dir:", err)
-			}
-			bottomPart.SetText("压缩文件夹。。。")
+			// 查看redis是不是有创建过任务，submitTime字段
+			// 查询 submitTime 字段
+			bottomPart.SetText("")
+			submitTime, err := rdb.HGet(ctx, uuidStr, "submitTime").Result()
+			fmt.Println("submitTime", submitTime)
+			if submitTime == "" {
+				err = bdfs.DeleteDir(uuidStr)
+				if err != nil {
+					fmt.Println("failed to delete dir:", err)
+				}
+				bottomPart.SetText("清空网盘任务。。。")
+				// 压缩文件夹
+				bdfs.Zipit(globalProject, globalProject+".zip")
+				err = bdfs.CreateDir(uuidStr)
+				if err != nil {
+					fmt.Println("failed to create dir:", err)
+				}
+				bottomPart.SetText("压缩文件夹。。。")
 
-			// 上传文件夹
-			err = bdfs.Upload(globalProject+".zip", uuidStr)
-			if err != nil {
-				fmt.Println("failed to upload file:", err)
+				// 上传文件夹
+				err = bdfs.Upload(globalProject+".zip", uuidStr)
+				if err != nil {
+					fmt.Println("failed to upload file:", err)
+				}
+				bottomPart.SetText("上传文件夹。。。")
+				// 删除本地压缩文件
+				err = os.Remove(globalProject + ".zip")
+				if err != nil {
+					fmt.Println("failed to remove file:", err)
+				}
+				// 更新redis uuid 下的任务状态为有任务需要执行，并将提交时间更新为当前时间
+				err = rdb.HSet(ctx, uuidStr, "cmd", bottomInput.Text, "taskStatus", "1", "log", "", "updateTime", time.Now().Format("2006-01-02 15:04:05"), "submitTime", time.Now().Format("2006-01-02 15:04:05")).Err()
+				if err != nil {
+					fmt.Println("failed to set info to redis :", err)
+				}
+				bottomPart.SetText("任务已创建")
+			} else {
+				fmt.Println("changedFile", changedFile)
+
+				// 如果changedFile不是空的话
+				if len(changedFile) != 0 {
+					for _, filename := range changedFile {
+						err = bdfs.Upload(filename, uuidStr)
+						if err != nil {
+							fmt.Println("failed to upload file:", err)
+						}
+					}
+				}
+				bottomPart.SetText("任务再次创建1")
+				//changedFile []string to string
+				changedFileStr := strings.Join(changedFile, ", ")
+
+				// 更新redis uuid 下的任务状态为有任务需要执行，并将提交时间更新为当前时间，cmd更新为bottomInput.Text
+				err = rdb.HSet(ctx, uuidStr, "cmd", bottomInput.Text, "changedFile", changedFileStr, "taskStatus", "1", "updateTime", time.Now().Format("2006-01-02 15:04:05")).Err()
+				if err != nil {
+					fmt.Println("failed to set info to redis :", err)
+				}
+
+				bottomPart.SetText("任务再次创建")
+
 			}
-			bottomPart.SetText("上传文件夹。。。")
-			// 删除本地压缩文件
-			err = os.Remove(globalProject + ".zip")
-			if err != nil {
-				fmt.Println("failed to remove file:", err)
-			}
-			// 更新redis uuid 下的任务状态为有任务需要执行，并将提交时间更新为当前时间
-			err = rdb.HSet(ctx, uuidStr, "cmd", bottomInput.Text, "taskStatus", "1", "log", "", "updateTime", time.Now().Format("2006-01-02 15:04:05"), "submitTime", time.Now().Format("2006-01-02 15:04:05")).Err()
-			if err != nil {
-				fmt.Println("failed to set info to redis :", err)
-			}
-			bottomPart.SetText("任务已创建")
 			//不停的轮询redis uuid 下的任务状态，如果为2，则下载文件夹
 			for {
 				// 获取任务状态
@@ -878,16 +977,18 @@ func main() {
 				bottomPart.SetText(log)
 
 				if status == "0" {
-					bottomPart.SetText("任务执行完成，获取结果。。。")
 					// 获取执行日志
 					log, err := rdb.HGet(ctx, uuidStr, "log").Result()
 					if err != nil {
 						fmt.Println("failed to get log:", err)
 					}
 					bottomPart.SetText(log)
+
 					break
 				}
 			}
+			changedFile = []string{}
+
 		}
 	})
 	// 竖直布局
@@ -994,8 +1095,21 @@ func main() {
 				} else {
 					customDialog.Hide()
 				}
+
 			}, myWindow)
+
 		})
+
+		// 如果 quit 通道已经存在，关闭它以停止旧的文件监听
+		if quit != nil {
+			close(quit)
+		}
+
+		// 创建一个新的可以关闭的通道
+		quit = make(chan bool)
+
+		// 在一个新的 goroutine 中开始监听路径下的文件变化
+		go ListenFsNotify(globalProject, &changedFile, quit)
 
 		githubImportButton := widget.NewButton("GitHub 导入", func() {
 			// 在这里添加导入 GitHub 代码的代码

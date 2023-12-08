@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"os"
 	"os/exec"
 	"sharedgpu/bdfs"
@@ -15,6 +16,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
+	"github.com/fsnotify/fsnotify"
 	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 	"github.com/shirou/gopsutil/cpu"
@@ -331,39 +333,7 @@ func HandleShortcuts(entry *widget.Entry, canvas fyne.Canvas, globalFilePath str
 		case *fyne.ShortcutSelectAll:
 			// 处理 Ctrl+A
 			entry.TypedShortcut(s)
-		case *desktop.CustomShortcut:
-			// 处理自定义快捷键
-			fmt.Println("KeyName:", s.KeyName)   // 打印 KeyName
-			fmt.Println("Modifier:", s.Modifier) // 打印 Modifier
-			// 处理自定义快捷键
-			if s.KeyName == fyne.KeyS && s.Modifier == desktop.ControlModifier {
-				// 处理 Ctrl+S
-				//保存entry 输入的内容到globalfile
-				fmt.Println(globalFilePath)
-				fmt.Println(entry.Text)
-				globalfile := entry.Text
-				err := ioutil.WriteFile(globalFilePath, []byte(globalfile), 0644)
-				if err != nil {
-					// 处理错误
-					fmt.Println("无法写入文件:", err)
-				}
-
-			} else if s.KeyName == fyne.KeyZ && s.Modifier == desktop.ControlModifier {
-				// 处理 Ctrl+Z
-				fmt.Println("Undo")
-			} else if s.KeyName == fyne.KeyTab && s.Modifier == desktop.ControlModifier {
-				// 处理 Ctrl+Tab
-				fmt.Println("Indent")
-			} else if s.KeyName == fyne.KeySlash && s.Modifier == desktop.ControlModifier {
-				// 处理 Ctrl+/
-				fmt.Println("Comment")
-			}
-
-		default:
-			// 处理未知的快捷键
-			fmt.Println("未知的快捷键:", sc)
 		}
-
 	}
 
 	// 添加快捷键处理器
@@ -371,8 +341,40 @@ func HandleShortcuts(entry *widget.Entry, canvas fyne.Canvas, globalFilePath str
 	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyZ, Modifier: desktop.ControlModifier}, shortcutHandler)
 	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyTab, Modifier: desktop.ControlModifier}, shortcutHandler)
 	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeySlash, Modifier: desktop.ControlModifier}, shortcutHandler)
-	canvas.AddShortcut(&fyne.ShortcutCopy{}, shortcutHandler)
-	canvas.AddShortcut(&fyne.ShortcutPaste{}, shortcutHandler)
-	canvas.AddShortcut(&fyne.ShortcutCut{}, shortcutHandler)
-	canvas.AddShortcut(&fyne.ShortcutSelectAll{}, shortcutHandler)
+
+}
+
+func ListenFsNotify(globalProject string, changedFile []string) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer watcher.Close()
+
+	done := make(chan bool)
+	go func() {
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				if event.Op&fsnotify.Write == fsnotify.Write {
+					// 将改变的文件名添加到 changedFile
+					changedFile = append(changedFile, event.Name)
+				}
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				log.Println("error:", err)
+			}
+		}
+	}()
+
+	err = watcher.Add(globalProject)
+	if err != nil {
+		log.Fatal(err)
+	}
+	<-done
 }
