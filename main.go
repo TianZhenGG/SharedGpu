@@ -99,7 +99,6 @@ func ListenFsNotify(globalProject string, changedFile *[]string, quit chan bool)
 					if !exists {
 						*changedFile = append(*changedFile, event.Name)
 					}
-					fmt.Println(changedFile)
 				}
 			case err, ok := <-watcher.Errors:
 				if !ok {
@@ -539,15 +538,16 @@ func main() {
 			dashboardWindow = fyne.CurrentApp().NewWindow("仪表盘")
 		}
 
-		go func() {
-			cpuLabel := widget.NewLabel("CPU: ")
-			memoryLabel := widget.NewLabel("内存: ")
-			diskLabel := widget.NewLabel("磁盘: ")
-			networkLabel := widget.NewLabel("网络: ")
-			gpuMemoryLabel := widget.NewLabel("GPU 内存: ")
+		// 创建一个可以被取消的 context
+		panCtx, panCancel := context.WithCancel(context.Background())
+		cpuLabel := widget.NewLabel("CPU: ")
+		memoryLabel := widget.NewLabel("内存: ")
+		diskLabel := widget.NewLabel("磁盘: ")
+		networkLabel := widget.NewLabel("网络: ")
+		gpuMemoryLabel := widget.NewLabel("GPU 内存: ")
 
-			// 创建一个可以被取消的 context
-			panCtx, panCancel := context.WithCancel(context.Background())
+		go func() {
+
 			// 在新的 goroutine 中定期更新仪表盘
 			go func() {
 				for {
@@ -579,197 +579,53 @@ func main() {
 				}
 			}()
 
-			unshareMachineButton := widget.NewButton("取消共享", func() {
-				// 删除 Redis 中的 uuid
-				err := rdb.Del(panCtx, uuidStr).Err()
-				if err != nil {
-					fmt.Println(fmt.Errorf("failed to delete uuid from redis: %w", err))
-				}
-				println("Machine is no longer shared.")
-
-				// 关闭窗口
-				dashboardWindow.Close()
-
-				// 停止更新仪表盘
-				panCancel()
-				atomic.StoreInt32(&isShared, 0)
-
-			})
-
-			// 将 unshareMachineButton 添加到窗口的内容中
-			dashboardWindow.SetContent(container.NewVBox(cpuLabel, memoryLabel, diskLabel, networkLabel, gpuMemoryLabel, unshareMachineButton))
-			dashboardWindow.SetOnClosed(func() {
-				// 删除 Redis 中的 uuid
-				err := rdb.Del(panCtx, uuidStr).Err()
-				if err != nil {
-					fmt.Println(fmt.Errorf("failed to delete uuid from redis: %w", err))
-				}
-				println("Machine is no longer shared.")
-
-				// 关闭窗口
-				dashboardWindow.Close()
-
-				// 停止更新仪表盘
-				panCancel()
-				atomic.StoreInt32(&isShared, 0)
-			})
-
-			dashboardWindow.Show()
-
 		}()
 
-		//创建一个新的循环线程去不停的轮询uuidStr下的任务状况,当taskStatus为1时则执行运行代码
-		go func() {
-			for {
-				// 轮询 uuidStr 下的任务状态
-				taskStatus, err := rdb.HGet(ctx, uuidStr, "taskStatus").Result()
+		//捕获异常
+		unshareMachineButton := widget.NewButton("取消共享", func() {
+			go func() {
+				// 检查 uuidStr 是否存在
+				exists, err := rdb.Exists(ctx, uuidStr).Result()
 				if err != nil {
-					// 处理错误
-					fmt.Println(err)
-					continue
+					fmt.Println(fmt.Errorf("failed to check existence of uuid in redis: %w", err))
 				}
 
-				// 当 taskStatus 为 "1" 时，执行运行代码
-				if taskStatus == "1" {
-
-					//获取当前目录
-					currentDir, err := os.Getwd()
+				// 如果 uuidStr 存在，删除它
+				if exists > 0 {
+					err = rdb.Del(ctx, uuidStr).Err()
 					if err != nil {
-						fmt.Println("failed to get cwd:", err)
-					}
-					// 这里添加你的运行代码
-					// 先下载代码和配置环境到本地tmp目录下面
-					// 从网盘uuidStr目录下下载代码和环境
-					// 执行本地机器的代码
-					// 从redis中获取updateTime 和 submitTime
-					updateTime, err := rdb.HGet(ctx, uuidStr, "updateTime").Result()
-					if err != nil {
-						fmt.Println("failed to get updateTime:", err)
-					}
-					submitTime, err := rdb.HGet(ctx, uuidStr, "submitTime").Result()
-					if err != nil {
-						fmt.Println("failed to get submitTime:", err)
-					}
-					//计算时间差
-					updateTimeObj, err := time.Parse("2006-01-02 15:04:05", updateTime)
-					if err != nil {
-						fmt.Println("failed to parse updateTime:", err)
-					}
-					submitTimeObj, err := time.Parse("2006-01-02 15:04:05", submitTime)
-					if err != nil {
-						fmt.Println("failed to parse submitTime:", err)
-					}
-					duration := updateTimeObj.Sub(submitTimeObj)
-
-					err = bdfs.Download(uuidStr, "", "./")
-					if err != nil {
-						fmt.Println("failed to download file:", err)
-					}
-
-					//新建文件夹currentdir
-					// err = os.MkdirAll(currentDir, 0755)
-					// if err != nil {
-					// 	log.Fatal(err)
-					// }
-
-					//如果currentDir没有miniconda 则下载
-					minicondaPath := filepath.Join(currentDir, "miniconda")
-					_, err = os.Stat(minicondaPath)
-					if os.IsNotExist(err) {
-						err = bdfs.Download("miniconda", "miniconda.zip", currentDir)
-						if err != nil {
-							fmt.Println("failed to download file:", err)
-						}
-
-						if err != nil {
-							fmt.Println("failed to get current dir:", err)
-						}
-
-					} else if err != nil {
-						// 其他错误
-						log.Fatal(err)
-					}
-
-					for {
-
-						files, err := ioutil.ReadDir(currentDir)
-						if err != nil {
-							fmt.Println("failed to read dir:", err)
-						}
-						downloading := false
-						for _, f := range files {
-							if strings.HasSuffix(f.Name(), ".BaiduPCS-Go-downloading") {
-								time.Sleep(time.Second * 2)
-								downloading = true
-								break
-							}
-						}
-						if downloading {
-							continue
-						}
-
-						err = filepath.Walk(currentDir+"/"+uuidStr, func(path string, info os.FileInfo, err error) error {
-							if err != nil {
-								return err
-							}
-							if !info.IsDir() && strings.HasSuffix(info.Name(), ".zip") {
-								// 使用完整路径解压文件
-								err = bdfs.Unzip(path, currentDir)
-								if err != nil {
-									fmt.Println("failed to unzip file:", err)
-								}
-							}
-							return nil
-						})
-						if err != nil {
-							log.Fatal(err)
-						}
-
-						//删除miniconda.zip
-						err = os.RemoveAll(filepath.Join(currentDir, "miniconda.zip"))
-						if err != nil {
-							fmt.Println("failed to remove miniconda.zip:", err)
-						}
-						break
-					}
-
-					//删除本地uuidStr下的压缩包
-					err = os.RemoveAll(filepath.Join(currentDir, uuidStr))
-					if err != nil {
-						fmt.Println("failed to remove dir:", err)
-					}
-
-					// 如果不一致则更新
-					if duration.Seconds() != 0 {
-						// 从redis获取changedFile
-						changedFileStr, err := rdb.HGet(ctx, uuidStr, "changedFile").Result()
-						if err != nil {
-							log.Fatal(err)
-						}
-						// string changedFileStr to []sting
-						changedFile := strings.Split(changedFileStr, ", ")
-						// 如果changedFile不是空的则下载文件到当前目录
-						if len(changedFile) != 0 {
-							// 使用 range 关键字遍历字符串切片
-							for _, filename := range changedFile {
-								err := bdfs.Download(uuidStr, filename, "./")
-								if err != nil {
-									log.Fatal(err)
-								}
-							}
-						}
-					}
-
-					utils.ExecCommand(selectedValue, bottomInput, bottomPart, globalProject, uuidStr, rdb)
-
-					//将taskStatus置为0
-					err = rdb.HSet(ctx, uuidStr, "taskStatus", "0", "updateTime", time.Now().Format("2006-01-02 15:04:05")).Err()
-					if err != nil {
-						fmt.Println("failed to set taskStatus:", err)
+						fmt.Println(fmt.Errorf("failed to delete uuid from redis: %w", err))
 					}
 				}
+				println("Machine is no longer shared.")
+			}()
+			atomic.StoreInt32(&isShared, 0)
+			// 关闭窗口
+			dashboardWindow.Close()
+			// 停止更新仪表盘
+			panCancel()
+
+		})
+
+		// 将 unshareMachineButton 添加到窗口的内容中
+		dashboardWindow.SetContent(container.NewVBox(cpuLabel, memoryLabel, diskLabel, networkLabel, gpuMemoryLabel, unshareMachineButton))
+		dashboardWindow.SetOnClosed(func() {
+			// 删除 Redis 中的 uuid
+			err := rdb.Del(panCtx, uuidStr).Err()
+			if err != nil {
+				fmt.Println(fmt.Errorf("failed to delete uuid from redis: %w", err))
 			}
-		}()
+			println("Machine is no longer shared.")
+
+			// 关闭窗口
+			dashboardWindow.Close()
+
+			// 停止更新仪表盘
+			panCancel()
+			atomic.StoreInt32(&isShared, 0)
+		})
+
+		dashboardWindow.Show()
 
 	})
 
@@ -899,10 +755,12 @@ func main() {
 		}
 
 		if selectedValue == "local" {
+			fmt.Println("local")
 			utils.ExecCommand(selectedValue, bottomInput, bottomPart, globalProject, uuidStr, rdb)
 		} else {
 			// 查看redis是不是有创建过任务，submitTime字段
 			// 查询 submitTime 字段
+			fmt.Println("远程==")
 			bottomPart.SetText("")
 			submitTime, err := rdb.HGet(ctx, uuidStr, "submitTime").Result()
 			fmt.Println("submitTime", submitTime)
@@ -970,11 +828,11 @@ func main() {
 					fmt.Println("failed to get status:", err)
 				}
 
-				log, err := rdb.HGet(ctx, uuidStr, "log").Result()
-				if err != nil {
-					fmt.Println("failed to get status:", err)
-				}
-				bottomPart.SetText(log)
+				// log, err := rdb.HGet(ctx, uuidStr, "log").Result()
+				// if err != nil {
+				// 	fmt.Println("failed to get status:", err)
+				// }
+				// bottomPart.SetText(log)
 
 				if status == "0" {
 					// 获取执行日志
@@ -983,6 +841,29 @@ func main() {
 						fmt.Println("failed to get log:", err)
 					}
 					bottomPart.SetText(log)
+
+					changedFileStr, err := rdb.HGet(ctx, uuidStr, "changedFile").Result()
+					if err != nil {
+						fmt.Println(err)
+					}
+					// string changedFileStr to []sting
+					changedFile := strings.Split(changedFileStr, ", ")
+					// 如果changedFile不是空的则下载文件到当前目录
+					if len(changedFile) != 0 {
+						// 使用 range 关键字遍历字符串切片
+						for _, filename := range changedFile {
+							err := bdfs.Download(uuidStr, filename, "./")
+							if err != nil {
+								fmt.Println(err)
+							}
+						}
+					}
+
+					//删除本地uuidStr下的压缩包
+					err = os.RemoveAll(globalProject + "/" + uuidStr)
+					if err != nil {
+						fmt.Println("failed to remove dir:", err)
+					}
 
 					break
 				}
@@ -1185,6 +1066,231 @@ func main() {
 	// 创建一个新的 Split 来包含 menuSplit 和 editorVimSplit
 	mainSplit := container.NewHSplit(menuSplit, editorVimSplit)
 	mainSplit.Offset = 0.2 // 调整位置
+
+	//创建一个新的循环线程去不停的轮询uuidStr下的任务状况,当taskStatus为1时则执行运行代码
+	go func() {
+		for {
+			// 检查 uuidStr 是否存在
+			exists, err := rdb.Exists(ctx, uuidStr).Result()
+			if err != nil {
+				// 处理错误
+				fmt.Println(err)
+				continue
+			}
+
+			// 如果 uuidStr 不存在，跳出循环
+			if exists == 0 {
+				continue
+			}
+
+			// 轮询 uuidStr 下的任务状态
+			taskStatus, err := rdb.HGet(ctx, uuidStr, "taskStatus").Result()
+			if err != nil {
+				// 处理错误
+				fmt.Println(err)
+				continue
+			}
+
+			//获取当前目录
+			currentDir, err := os.Getwd()
+			if err != nil {
+				fmt.Println("failed to get cwd:", err)
+			}
+
+			//如果currentDir没有miniconda 则下载
+			minicondaPath := filepath.Join(currentDir, "miniconda")
+			_, err = os.Stat(minicondaPath)
+			if os.IsNotExist(err) {
+				err = bdfs.Download("miniconda", "miniconda.zip", currentDir)
+				if err != nil {
+					fmt.Println("failed to download file:", err)
+				}
+
+				if err != nil {
+					fmt.Println("failed to get current dir:", err)
+				}
+
+				for {
+
+					files, err := ioutil.ReadDir(currentDir)
+					if err != nil {
+						fmt.Println("failed to read dir:", err)
+					}
+					downloading := false
+					for _, f := range files {
+						if strings.HasSuffix(f.Name(), ".BaiduPCS-Go-downloading") {
+							time.Sleep(time.Second * 2)
+							downloading = true
+							break
+						}
+					}
+					if downloading {
+						continue
+					}
+
+					err = filepath.Walk(currentDir, func(path string, info os.FileInfo, err error) error {
+						if err != nil {
+							return err
+						}
+						if !info.IsDir() && strings.HasSuffix(info.Name(), ".zip") {
+							// 使用完整路径解压文件
+							err = bdfs.Unzip(path, currentDir)
+							if err != nil {
+								fmt.Println("failed to unzip file:", err)
+							}
+						}
+						return nil
+					})
+					if err != nil {
+						log.Fatal(err)
+					}
+
+					//删除miniconda.zip
+					err = os.RemoveAll(filepath.Join(currentDir, "miniconda.zip"))
+					if err != nil {
+						fmt.Println("failed to remove miniconda.zip:", err)
+					}
+					break
+				}
+
+				//删除miniconda.zip
+				err = os.RemoveAll(filepath.Join(currentDir, "miniconda.zip"))
+				if err != nil {
+					fmt.Println("failed to remove miniconda.zip:", err)
+				}
+
+			} else if err != nil {
+				// 其他错误
+				log.Fatal(err)
+			}
+
+			// 当 taskStatus 为 "1" 时，执行运行代码
+			if taskStatus == "1" {
+
+				updateTime, err := rdb.HGet(ctx, uuidStr, "updateTime").Result()
+				if err != nil {
+					fmt.Println("failed to get updateTime:", err)
+				}
+				submitTime, err := rdb.HGet(ctx, uuidStr, "submitTime").Result()
+				if err != nil {
+					fmt.Println("failed to get submitTime:", err)
+				}
+				//计算时间差
+				updateTimeObj, err := time.Parse("2006-01-02 15:04:05", updateTime)
+				if err != nil {
+					fmt.Println("failed to parse updateTime:", err)
+				}
+				submitTimeObj, err := time.Parse("2006-01-02 15:04:05", submitTime)
+				if err != nil {
+					fmt.Println("failed to parse submitTime:", err)
+				}
+				duration := updateTimeObj.Sub(submitTimeObj)
+				uuidStrPath := filepath.Join(currentDir, uuidStr)
+				err = os.MkdirAll(uuidStrPath, 0755)
+				if err != nil {
+					fmt.Println(fmt.Errorf("failed to create directory: %w", err))
+				}
+
+				err = bdfs.Download(uuidStr, "", "./")
+				if err != nil {
+					fmt.Println("failed to download file:", err)
+				}
+
+				//sleep
+				time.Sleep(10 * time.Second)
+
+				for {
+
+					files, err := ioutil.ReadDir(uuidStrPath)
+					if err != nil {
+						fmt.Println("failed to read dir:", err)
+					}
+					downloading := false
+					for _, f := range files {
+						if strings.HasSuffix(f.Name(), ".BaiduPCS-Go-downloading") {
+							time.Sleep(time.Second * 2)
+							downloading = true
+							break
+						}
+					}
+					if downloading {
+						continue
+					}
+					break
+				}
+
+				err = filepath.Walk(uuidStrPath, func(path string, info os.FileInfo, err error) error {
+					if err != nil {
+						return err
+					}
+					if !info.IsDir() && strings.HasSuffix(info.Name(), ".zip") {
+						// 使用完整路径解压文件
+						err = bdfs.Unzip(path, uuidStrPath)
+						if err != nil {
+							fmt.Println("failed to unzip file:", err)
+						}
+					}
+					return nil
+				})
+				if err != nil {
+					log.Fatal(err)
+				}
+
+				//删除本地uuidStr下的压缩包
+				err = os.RemoveAll(uuidStrPath)
+				if err != nil {
+					fmt.Println("failed to remove dir:", err)
+				}
+
+				// 如果不一致则更新
+				if duration.Seconds() != 0 {
+					// 从redis获取changedFile
+					changedFileStr, err := rdb.HGet(ctx, uuidStr, "changedFile").Result()
+					if err != nil {
+						log.Fatal(err)
+					}
+					// string changedFileStr to []sting
+					changedFile := strings.Split(changedFileStr, ", ")
+					// 如果changedFile不是空的则下载文件到当前目录
+					if len(changedFile) != 0 {
+						// 使用 range 关键字遍历字符串切片
+						for _, filename := range changedFile {
+							err := bdfs.Download(uuidStr, filename, "./")
+							if err != nil {
+								log.Fatal(err)
+							}
+						}
+					}
+				}
+
+				// 创建一个新的可以关闭的通道
+				quit = make(chan bool)
+
+				changedFile = []string{}
+
+				// 在一个新的 goroutine 中开始监听路径下的文件变化
+				go ListenFsNotify(currentDir, &changedFile, quit)
+
+				utils.ExecCommand(selectedValue, bottomInput, bottomPart, globalProject, uuidStr, rdb)
+
+				// 如果changedFile不是空的话
+				if len(changedFile) != 0 {
+					for _, filename := range changedFile {
+						err = bdfs.Upload(filename, uuidStr)
+						if err != nil {
+							fmt.Println("failed to upload file:", err)
+						}
+					}
+				}
+				changedFileStr := strings.Join(changedFile, ", ")
+				//将taskStatus置为0
+				err = rdb.HSet(ctx, uuidStr, "taskStatus", "0", "changedFile", changedFileStr, "updateTime", time.Now().Format("2006-01-02 15:04:05")).Err()
+				if err != nil {
+					fmt.Println("failed to set taskStatus:", err)
+				}
+			}
+		}
+	}()
 
 	myWindow.SetContent(mainSplit)
 	myWindow.ShowAndRun()
