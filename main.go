@@ -852,9 +852,34 @@ func main() {
 					if len(changedFile) != 0 {
 						// 使用 range 关键字遍历字符串切片
 						for _, filename := range changedFile {
-							err := bdfs.Download(uuidStr, filename, "./")
-							if err != nil {
-								fmt.Println(err)
+							//split filename,最后一个/后面的就是文件名
+							filename = filepath.Base(filename)
+							fmt.Println("filenaem", filename)
+							if filename != "." {
+								err := bdfs.Download(uuidStr, filename, "./")
+								if err != nil {
+									fmt.Println(err)
+								}
+								for {
+
+									files, err := ioutil.ReadDir(globalProject)
+									if err != nil {
+										fmt.Println("failed to read dir:", err)
+									}
+									downloading := false
+									for _, f := range files {
+										if strings.HasSuffix(f.Name(), ".BaiduPCS-Go-downloading") {
+											time.Sleep(time.Second * 2)
+											downloading = true
+											break
+										}
+									}
+									if downloading {
+										continue
+									}
+
+									break
+								}
 							}
 						}
 					}
@@ -1186,65 +1211,62 @@ func main() {
 					fmt.Println("failed to parse submitTime:", err)
 				}
 				duration := updateTimeObj.Sub(submitTimeObj)
+
 				uuidStrPath := filepath.Join(currentDir, uuidStr)
 				err = os.MkdirAll(uuidStrPath, 0755)
 				if err != nil {
 					fmt.Println(fmt.Errorf("failed to create directory: %w", err))
 				}
 
-				err = bdfs.Download(uuidStr, "", "./")
-				if err != nil {
-					fmt.Println("failed to download file:", err)
-				}
+				if duration.Seconds() == 0 {
 
-				//sleep
-				time.Sleep(10 * time.Second)
-
-				for {
-
-					files, err := ioutil.ReadDir(uuidStrPath)
+					err = bdfs.Download(uuidStr, "", "./")
 					if err != nil {
-						fmt.Println("failed to read dir:", err)
+						fmt.Println("failed to download file:", err)
 					}
-					downloading := false
-					for _, f := range files {
-						if strings.HasSuffix(f.Name(), ".BaiduPCS-Go-downloading") {
-							time.Sleep(time.Second * 2)
-							downloading = true
-							break
-						}
-					}
-					if downloading {
-						continue
-					}
-					break
-				}
+					for {
 
-				err = filepath.Walk(uuidStrPath, func(path string, info os.FileInfo, err error) error {
-					if err != nil {
-						return err
-					}
-					if !info.IsDir() && strings.HasSuffix(info.Name(), ".zip") {
-						// 使用完整路径解压文件
-						err = bdfs.Unzip(path, uuidStrPath)
+						files, err := ioutil.ReadDir(uuidStrPath)
 						if err != nil {
-							fmt.Println("failed to unzip file:", err)
+							fmt.Println("failed to read dir:", err)
 						}
+						downloading := false
+						for _, f := range files {
+							if strings.HasSuffix(f.Name(), ".BaiduPCS-Go-downloading") {
+								time.Sleep(time.Second * 2)
+								downloading = true
+								break
+							}
+						}
+						if downloading {
+							continue
+						}
+						break
 					}
-					return nil
-				})
-				if err != nil {
-					log.Fatal(err)
-				}
 
-				//删除本地uuidStr下的压缩包
-				err = os.RemoveAll(uuidStrPath)
-				if err != nil {
-					fmt.Println("failed to remove dir:", err)
-				}
+					err = filepath.Walk(uuidStrPath, func(path string, info os.FileInfo, err error) error {
+						if err != nil {
+							return err
+						}
+						if !info.IsDir() && strings.HasSuffix(info.Name(), ".zip") {
+							// 使用完整路径解压文件
+							err = bdfs.Unzip(path, uuidStrPath)
+							if err != nil {
+								fmt.Println("failed to unzip file:", err)
+							}
+						}
+						return nil
+					})
+					if err != nil {
+						log.Fatal(err)
+					}
 
-				// 如果不一致则更新
-				if duration.Seconds() != 0 {
+					//删除本地uuidStr下的压缩包
+					err = os.RemoveAll(uuidStrPath)
+					if err != nil {
+						fmt.Println("failed to remove dir:", err)
+					}
+				} else {
 					// 从redis获取changedFile
 					changedFileStr, err := rdb.HGet(ctx, uuidStr, "changedFile").Result()
 					if err != nil {
@@ -1256,9 +1278,35 @@ func main() {
 					if len(changedFile) != 0 {
 						// 使用 range 关键字遍历字符串切片
 						for _, filename := range changedFile {
-							err := bdfs.Download(uuidStr, filename, "./")
-							if err != nil {
-								log.Fatal(err)
+							//这里是路径，只想要文件名称
+							filename = filepath.Base(filename)
+							fmt.Println("filenaems", filename)
+							if filename != "." {
+								err := bdfs.Download(uuidStr, filename, "./")
+								if err != nil {
+									fmt.Println(err)
+								}
+								for {
+
+									files, err := ioutil.ReadDir(currentDir)
+									if err != nil {
+										fmt.Println("failed to read dir:", err)
+									}
+									downloading := false
+									for _, f := range files {
+										if strings.HasSuffix(f.Name(), ".BaiduPCS-Go-downloading") {
+											time.Sleep(time.Second * 2)
+											downloading = true
+											break
+										}
+									}
+									if downloading {
+										continue
+									}
+
+									break
+								}
+
 							}
 						}
 					}
