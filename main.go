@@ -1263,6 +1263,11 @@ func main() {
 					}
 				}
 
+				// 如果 quit 通道已经存在，关闭它以停止旧的文件监听
+				if quit != nil {
+					close(quit)
+				}
+
 				// 创建一个新的可以关闭的通道
 				quit = make(chan bool)
 
