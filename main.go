@@ -750,7 +750,7 @@ func main() {
 
 	executeButton := widget.NewButton("执行", func() {
 		if selectedValue == "" {
-			labelout.SetText("请选择机器")
+			bottomPart.SetText("请选择机器")
 			return
 		}
 
@@ -989,6 +989,7 @@ func main() {
 		// 创建一个新的可以关闭的通道
 		quit = make(chan bool)
 
+		changedFile = []string{}
 		// 在一个新的 goroutine 中开始监听路径下的文件变化
 		go ListenFsNotify(globalProject, &changedFile, quit)
 
