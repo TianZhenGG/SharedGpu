@@ -99,7 +99,7 @@ func Upload(localFile, remoteDir string) error {
 	defer cancel()
 
 	if runtime.GOOS == "windows" {
-		cmd := exec.CommandContext(ctx, "powershell", "bdfs/baidupcs-go.exe", "upload", "-p 10 -l 10", localFile, remoteDir)
+		cmd := exec.CommandContext(ctx, "powershell", "bdfs/baidupcs-go.exe", "upload", "--policy overwrite -p 10 -l 10", localFile, remoteDir)
 		err := cmd.Run()
 		if err != nil {
 			return err
