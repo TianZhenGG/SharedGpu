@@ -23,6 +23,7 @@ import (
 	"github.com/shirou/gopsutil/disk"
 	"github.com/shirou/gopsutil/mem"
 	"github.com/shirou/gopsutil/net"
+	"golang.org/x/sys/windows"
 )
 
 func GenerateUUID(machineModel string) uuid.UUID {
@@ -93,6 +94,7 @@ func GetSystemUsage() (cpuUsage, memoryUsage, diskUsage, networkUsage string, gp
 // 获取显卡信息
 func GetGPUMemoryUsage() (map[string]string, error) {
 	cmd := exec.Command("nvidia-smi", "--query-gpu=name,memory.used", "--format=csv,noheader,nounits")
+	cmd.SysProcAttr = &windows.SysProcAttr{HideWindow: true}
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("failed to run nvidia-smi: %v", err)
@@ -229,6 +231,7 @@ func ExecCommand(execType string, bottomInput *widget.Entry, bottomPart *widget.
 	args := strings.Fields(inputText)
 	fmt.Println("args", args)
 	cmd := exec.Command(args[0], args[1:]...)
+	cmd.SysProcAttr = &windows.SysProcAttr{HideWindow: true}
 	// 获取命令的输出
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

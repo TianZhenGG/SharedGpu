@@ -10,11 +10,14 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"golang.org/x/sys/windows"
 )
 
 func LoginBd(bduss string) error {
 	if runtime.GOOS == "windows" {
 		cmd := exec.Command("powershell", "bdfs/baidupcs-go.exe", "login", "-bduss=", bduss)
+		cmd.SysProcAttr = &windows.SysProcAttr{HideWindow: true}
 		err := cmd.Run()
 		if err != nil {
 			return err
@@ -22,6 +25,7 @@ func LoginBd(bduss string) error {
 		return nil
 	} else {
 		cmd := exec.Command("bdfs/baidupcs-go", "login", "-bduss="+bduss)
+		cmd.SysProcAttr = &windows.SysProcAttr{HideWindow: true}
 		err := cmd.Run()
 		if err != nil {
 			return err
@@ -33,6 +37,7 @@ func LoginBd(bduss string) error {
 func CreateDir(remoteDir string) error {
 	if runtime.GOOS == "windows" {
 		cmd := exec.Command("powershell", "bdfs/baidupcs-go.exe", "mkdir", remoteDir)
+		cmd.SysProcAttr = &windows.SysProcAttr{HideWindow: true}
 		err := cmd.Run()
 		if err != nil {
 			return err
@@ -40,6 +45,7 @@ func CreateDir(remoteDir string) error {
 		return nil
 	} else {
 		cmd := exec.Command("bdfs/baidupcs-go", "mkdir", remoteDir)
+		cmd.SysProcAttr = &windows.SysProcAttr{HideWindow: true}
 		err := cmd.Run()
 		if err != nil {
 			return err
@@ -51,6 +57,7 @@ func CreateDir(remoteDir string) error {
 func DeleteDir(remoteDir string) error {
 	if runtime.GOOS == "windows" {
 		cmd := exec.Command("powershell", "bdfs/baidupcs-go.exe", "rm", remoteDir)
+		cmd.SysProcAttr = &windows.SysProcAttr{HideWindow: true}
 		err := cmd.Run()
 		if err != nil {
 			return err
@@ -58,6 +65,7 @@ func DeleteDir(remoteDir string) error {
 		return nil
 	} else {
 		cmd := exec.Command("bdfs/baidupcs-go", "rm", remoteDir)
+		cmd.SysProcAttr = &windows.SysProcAttr{HideWindow: true}
 		err := cmd.Run()
 		if err != nil {
 			return err
@@ -74,6 +82,7 @@ func Download(remoteDir, remoteFile string, savepath string) error {
 	// 如果是 windows
 	if runtime.GOOS == "windows" {
 		cmd := exec.CommandContext(ctx, "powershell", "bdfs/baidupcs-go.exe", "d  --ow --status --saveto", savepath, "-p 20 -l 20", remoteDir+"/"+remoteFile)
+		cmd.SysProcAttr = &windows.SysProcAttr{HideWindow: true}
 		err := cmd.Run()
 		if err != nil {
 			return err
@@ -81,6 +90,7 @@ func Download(remoteDir, remoteFile string, savepath string) error {
 	} else {
 		fmt.Println("linux")
 		cmd := exec.CommandContext(ctx, "bdfs/baidupcs-go", "download", "--ow --status --save -p 20 -l 20", remoteDir+remoteFile)
+		cmd.SysProcAttr = &windows.SysProcAttr{HideWindow: true}
 		err := cmd.Run()
 		if err != nil {
 			return err
@@ -100,12 +110,14 @@ func Upload(localFile, remoteDir string) error {
 
 	if runtime.GOOS == "windows" {
 		cmd := exec.CommandContext(ctx, "powershell", "bdfs/baidupcs-go.exe", "upload", "--policy overwrite -p 10 -l 10", localFile, remoteDir)
+		cmd.SysProcAttr = &windows.SysProcAttr{HideWindow: true}
 		err := cmd.Run()
 		if err != nil {
 			return err
 		}
 	} else {
 		cmd := exec.CommandContext(ctx, "bdfs/baidupcs-go", "upload", "-p 10 -l 10", localFile, remoteDir)
+		cmd.SysProcAttr = &windows.SysProcAttr{HideWindow: true}
 		err := cmd.Run()
 		if err != nil {
 			return err

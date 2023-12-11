@@ -256,10 +256,25 @@ func (b *LeftAlignedButton) Tapped(*fyne.PointEvent) {
 
 func main() {
 	myApp := app.NewWithID("myApp")
-	myApp.Settings().SetTheme(theme.DarkTheme())
+
+	// 创建一个主题列表
+	themes := map[string]fyne.Theme{
+		"Light": theme.LightTheme(),
+		"Dark":  theme.DarkTheme(),
+	}
 
 	myWindow := myApp.NewWindow("Client")
 	myWindow.Resize(fyne.NewSize(1024, 768))
+
+	// 创建一个按钮，当用户点击按钮时，显示一个包含主题选择器的对话框
+	themeButton := widget.NewButton("主题", func() {
+		themeSelector := widget.NewSelect([]string{"Light", "Dark"}, func(themeName string) {
+			// 当用户选择一个主题时，更新应用的主题
+			myApp.Settings().SetTheme(themes[themeName])
+		})
+
+		dialog.ShowCustom("Select Theme", "OK", themeSelector, myWindow)
+	})
 
 	// 创建一个 context.Context 对象
 	ctx := context.Background()
@@ -1078,6 +1093,7 @@ func main() {
 	buttons := container.NewVBox(
 		button1, // 添加快捷按钮
 		button2, // 添加快捷按钮
+		themeButton,
 	)
 
 	// 使用 container.NewBorder 创建一个新的容器，将菜单放在顶部，将按钮放在底部
@@ -1118,57 +1134,65 @@ func main() {
 			}
 
 			//获取当前目录
-			currentDir, err := os.Getwd()
+			currentDir := globalProject
 			if err != nil {
 				fmt.Println("failed to get cwd:", err)
 			}
-
-			//如果currentDir没有miniconda 则下载
-			minicondaPath := filepath.Join(currentDir, "miniconda")
-			_, err = os.Stat(minicondaPath)
-			if os.IsNotExist(err) {
-				err = bdfs.Download("miniconda", "miniconda.zip", currentDir)
-				if err != nil {
-					fmt.Println("failed to download file:", err)
-				}
-
-				if err != nil {
-					fmt.Println("failed to get current dir:", err)
-				}
-
-				for {
-
-					files, err := ioutil.ReadDir(currentDir)
+			if currentDir != "" {
+				//如果currentDir没有miniconda 则下载
+				minicondaPath := filepath.Join(currentDir, "miniconda")
+				_, err = os.Stat(minicondaPath)
+				if os.IsNotExist(err) {
+					err = bdfs.Download("miniconda", "miniconda.zip", currentDir)
 					if err != nil {
-						fmt.Println("failed to read dir:", err)
-					}
-					downloading := false
-					for _, f := range files {
-						if strings.HasSuffix(f.Name(), ".BaiduPCS-Go-downloading") {
-							time.Sleep(time.Second * 2)
-							downloading = true
-							break
-						}
-					}
-					if downloading {
-						continue
+						fmt.Println("failed to download file:", err)
 					}
 
-					err = filepath.Walk(currentDir, func(path string, info os.FileInfo, err error) error {
+					if err != nil {
+						fmt.Println("failed to get current dir:", err)
+					}
+
+					for {
+
+						files, err := ioutil.ReadDir(currentDir)
 						if err != nil {
-							return err
+							fmt.Println("failed to read dir:", err)
 						}
-						if !info.IsDir() && strings.HasSuffix(info.Name(), ".zip") {
-							// 使用完整路径解压文件
-							err = bdfs.Unzip(path, currentDir)
-							if err != nil {
-								fmt.Println("failed to unzip file:", err)
+						downloading := false
+						for _, f := range files {
+							if strings.HasSuffix(f.Name(), ".BaiduPCS-Go-downloading") {
+								time.Sleep(time.Second * 2)
+								downloading = true
+								break
 							}
 						}
-						return nil
-					})
-					if err != nil {
-						log.Fatal(err)
+						if downloading {
+							continue
+						}
+
+						err = filepath.Walk(currentDir, func(path string, info os.FileInfo, err error) error {
+							if err != nil {
+								return err
+							}
+							if !info.IsDir() && strings.HasSuffix(info.Name(), ".zip") {
+								// 使用完整路径解压文件
+								err = bdfs.Unzip(path, currentDir)
+								if err != nil {
+									fmt.Println("failed to unzip file:", err)
+								}
+							}
+							return nil
+						})
+						if err != nil {
+							log.Fatal(err)
+						}
+
+						//删除miniconda.zip
+						err = os.RemoveAll(filepath.Join(currentDir, "miniconda.zip"))
+						if err != nil {
+							fmt.Println("failed to remove miniconda.zip:", err)
+						}
+						break
 					}
 
 					//删除miniconda.zip
@@ -1176,18 +1200,11 @@ func main() {
 					if err != nil {
 						fmt.Println("failed to remove miniconda.zip:", err)
 					}
-					break
-				}
 
-				//删除miniconda.zip
-				err = os.RemoveAll(filepath.Join(currentDir, "miniconda.zip"))
-				if err != nil {
-					fmt.Println("failed to remove miniconda.zip:", err)
+				} else if err != nil {
+					// 其他错误
+					log.Fatal(err)
 				}
-
-			} else if err != nil {
-				// 其他错误
-				log.Fatal(err)
 			}
 
 			// 当 taskStatus 为 "1" 时，执行运行代码
