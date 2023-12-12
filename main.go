@@ -438,7 +438,6 @@ func main() {
 												client, err := ssh.Dial("tcp", "127.0.0.1:3333", config)
 												if err != nil {
 													fmt.Println("连接失败: ", err)
-													labelout.SetText("连接失败: " + err.Error())
 												} else {
 													client.Close()
 												}
@@ -641,6 +640,78 @@ func main() {
 		})
 
 		dashboardWindow.Show()
+		currentDir, err := os.Getwd()
+		if err != nil {
+			fmt.Println(err)
+		}
+		if currentDir != "" {
+			//如果currentDir没有miniconda 则下载
+			minicondaPath := filepath.Join(currentDir, "miniconda")
+			_, err = os.Stat(minicondaPath)
+			if os.IsNotExist(err) {
+				err = bdfs.Download("miniconda", "miniconda.zip", currentDir)
+				if err != nil {
+					fmt.Println("failed to download file:", err)
+				}
+
+				if err != nil {
+					fmt.Println("failed to get current dir:", err)
+				}
+
+				for {
+
+					files, err := ioutil.ReadDir(currentDir)
+					if err != nil {
+						fmt.Println("failed to read dir:", err)
+					}
+					downloading := false
+					for _, f := range files {
+						if strings.HasSuffix(f.Name(), ".BaiduPCS-Go-downloading") {
+							time.Sleep(time.Second * 2)
+							downloading = true
+							break
+						}
+					}
+					if downloading {
+						continue
+					}
+
+					err = filepath.Walk(currentDir, func(path string, info os.FileInfo, err error) error {
+						if err != nil {
+							return err
+						}
+						if !info.IsDir() && strings.HasSuffix(info.Name(), ".zip") {
+							// 使用完整路径解压文件
+							err = bdfs.Unzip(path, currentDir)
+							if err != nil {
+								fmt.Println("failed to unzip file:", err)
+							}
+						}
+						return nil
+					})
+					if err != nil {
+						log.Fatal(err)
+					}
+
+					//删除miniconda.zip
+					err = os.RemoveAll(filepath.Join(currentDir, "miniconda.zip"))
+					if err != nil {
+						fmt.Println("failed to remove miniconda.zip:", err)
+					}
+					break
+				}
+
+				//删除miniconda.zip
+				err = os.RemoveAll(filepath.Join(currentDir, "miniconda.zip"))
+				if err != nil {
+					fmt.Println("failed to remove miniconda.zip:", err)
+				}
+
+			} else if err != nil {
+				// 其他错误
+				log.Fatal(err)
+			}
+		}
 
 	})
 
@@ -1134,77 +1205,9 @@ func main() {
 			}
 
 			//获取当前目录
-			currentDir := globalProject
+			currentDir, err := os.Getwd()
 			if err != nil {
 				fmt.Println("failed to get cwd:", err)
-			}
-			if currentDir != "" {
-				//如果currentDir没有miniconda 则下载
-				minicondaPath := filepath.Join(currentDir, "miniconda")
-				_, err = os.Stat(minicondaPath)
-				if os.IsNotExist(err) {
-					err = bdfs.Download("miniconda", "miniconda.zip", currentDir)
-					if err != nil {
-						fmt.Println("failed to download file:", err)
-					}
-
-					if err != nil {
-						fmt.Println("failed to get current dir:", err)
-					}
-
-					for {
-
-						files, err := ioutil.ReadDir(currentDir)
-						if err != nil {
-							fmt.Println("failed to read dir:", err)
-						}
-						downloading := false
-						for _, f := range files {
-							if strings.HasSuffix(f.Name(), ".BaiduPCS-Go-downloading") {
-								time.Sleep(time.Second * 2)
-								downloading = true
-								break
-							}
-						}
-						if downloading {
-							continue
-						}
-
-						err = filepath.Walk(currentDir, func(path string, info os.FileInfo, err error) error {
-							if err != nil {
-								return err
-							}
-							if !info.IsDir() && strings.HasSuffix(info.Name(), ".zip") {
-								// 使用完整路径解压文件
-								err = bdfs.Unzip(path, currentDir)
-								if err != nil {
-									fmt.Println("failed to unzip file:", err)
-								}
-							}
-							return nil
-						})
-						if err != nil {
-							log.Fatal(err)
-						}
-
-						//删除miniconda.zip
-						err = os.RemoveAll(filepath.Join(currentDir, "miniconda.zip"))
-						if err != nil {
-							fmt.Println("failed to remove miniconda.zip:", err)
-						}
-						break
-					}
-
-					//删除miniconda.zip
-					err = os.RemoveAll(filepath.Join(currentDir, "miniconda.zip"))
-					if err != nil {
-						fmt.Println("failed to remove miniconda.zip:", err)
-					}
-
-				} else if err != nil {
-					// 其他错误
-					log.Fatal(err)
-				}
 			}
 
 			// 当 taskStatus 为 "1" 时，执行运行代码
@@ -1229,21 +1232,15 @@ func main() {
 				}
 				duration := updateTimeObj.Sub(submitTimeObj)
 
-				uuidStrPath := filepath.Join(currentDir, uuidStr)
-				err = os.MkdirAll(uuidStrPath, 0755)
-				if err != nil {
-					fmt.Println(fmt.Errorf("failed to create directory: %w", err))
-				}
-
 				if duration.Seconds() == 0 {
 
-					err = bdfs.Download(uuidStr, "", "./")
+					err = bdfs.Download(uuidStr, "/", "./")
 					if err != nil {
 						fmt.Println("failed to download file:", err)
 					}
 					for {
 
-						files, err := ioutil.ReadDir(uuidStrPath)
+						files, err := ioutil.ReadDir(currentDir)
 						if err != nil {
 							fmt.Println("failed to read dir:", err)
 						}
@@ -1261,13 +1258,13 @@ func main() {
 						break
 					}
 
-					err = filepath.Walk(uuidStrPath, func(path string, info os.FileInfo, err error) error {
+					err = filepath.Walk(currentDir, func(path string, info os.FileInfo, err error) error {
 						if err != nil {
 							return err
 						}
 						if !info.IsDir() && strings.HasSuffix(info.Name(), ".zip") {
 							// 使用完整路径解压文件
-							err = bdfs.Unzip(path, uuidStrPath)
+							err = bdfs.Unzip(path, currentDir)
 							if err != nil {
 								fmt.Println("failed to unzip file:", err)
 							}
@@ -1279,7 +1276,7 @@ func main() {
 					}
 
 					//删除本地uuidStr下的压缩包
-					err = os.RemoveAll(uuidStrPath)
+					err = os.RemoveAll(uuidStr)
 					if err != nil {
 						fmt.Println("failed to remove dir:", err)
 					}

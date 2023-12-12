@@ -5,11 +5,8 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"fmt"
-	"io/ioutil"
 	"log"
-	"os"
 	"os/exec"
-	"sharedgpu/bdfs"
 	"strings"
 	"time"
 
@@ -175,57 +172,6 @@ func ExecCommand(execType string, bottomInput *widget.Entry, bottomPart *widget.
 	inputText = strings.Replace(inputText, "python3 ", "miniconda/python.exe ", -1)
 	inputText = strings.Replace(inputText, "pip ", "miniconda/python.exe -m pip ", -1)
 	inputText = strings.Replace(inputText, "pip3 ", "miniconda/python.exe -m pip ", -1)
-
-	//如果本地没有miniconda，则下载miniconda
-	if _, err := os.Stat("miniconda"); os.IsNotExist(err) {
-		if execType == "local" {
-			bottomPart.SetText("正在配置环境，请稍等。。。")
-		} else {
-			//打入redis log
-			err = rdb.HSet(ctx, uuidStr, "log", "正在配置环境，请稍等。。。").Err()
-			if err != nil {
-				fmt.Println("failed to set log:", err)
-			}
-		}
-		// 执行本地机器的代码
-		err = bdfs.Download("miniconda", "miniconda.zip", "./")
-		if err != nil {
-			fmt.Println("failed to download file:", err)
-		}
-		//project目录下有没有.BaiduPCS-Go-downloading结尾的文件，如果有则等待，如果没有则解压文件
-		for {
-
-			files, err := ioutil.ReadDir(globalProject)
-			if err != nil {
-				fmt.Println("failed to read dir:", err)
-			}
-			downloading := false
-			for _, f := range files {
-				if strings.HasSuffix(f.Name(), ".BaiduPCS-Go-downloading") {
-					time.Sleep(time.Second * 2)
-					downloading = true
-					break
-				}
-			}
-			if downloading {
-				continue
-			}
-
-			// 解压文件
-			fmt.Println("解压文件", globalProject)
-			err = bdfs.Unzip("miniconda.zip", globalProject)
-			if err != nil {
-				fmt.Println("failed to unzip file:", err)
-			}
-			// 删除压缩包
-			err = os.Remove("miniconda.zip")
-			if err != nil {
-				fmt.Println("failed to remove file:", err)
-			}
-			break
-		}
-
-	}
 
 	// 切分 bottomInput.Text
 	args := strings.Fields(inputText)
