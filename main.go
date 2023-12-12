@@ -1337,7 +1337,7 @@ func main() {
 				changedFile = []string{}
 
 				// 在一个新的 goroutine 中开始监听路径下的文件变化
-				go ListenFsNotify(currentDir, &changedFile, quit)
+				go ListenFsNotify(globalProject, &changedFile, quit)
 
 				utils.ExecCommand(selectedValue, bottomInput, bottomPart, globalProject, uuidStr, rdb)
 
