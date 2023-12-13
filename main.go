@@ -209,17 +209,22 @@ func showFolderContents(folderPath string, editorVim *widget.Entry, leftbottom *
 		currentFilePath := filepath.Join(folderPath, file.Name())
 
 		if file.IsDir() {
+
 			folderButton := widget.NewButtonWithIcon(file.Name(), theme.FolderIcon(), func() {
 				// 是文件夹，显示文件夹下的内容
 				showFolderContents(currentFilePath, editorVim, leftbottom)
 			})
 			leftbottom.Add(folderButton)
 		} else {
-			fileButton := widget.NewButtonWithIcon(file.Name(), theme.FileIcon(), func() {
+			fileLink := widget.NewHyperlink(file.Name(), nil)
+			fileLink.OnTapped = func() {
 				// 是文件，显示文件内容
 				readFile(currentFilePath, editorVim)
-			})
-			leftbottom.Add(fileButton)
+			}
+
+			// 创建一个新的居中容器，并将链接添加到这个容器中
+			centerContainer := container.NewCenter(fileLink)
+			leftbottom.Add(centerContainer)
 		}
 	}
 
@@ -267,7 +272,7 @@ func main() {
 	myWindow.Resize(fyne.NewSize(1024, 768))
 
 	// 创建一个按钮，当用户点击按钮时，显示一个包含主题选择器的对话框
-	themeButton := widget.NewButton("主题", func() {
+	themeButton := widget.NewButtonWithIcon("选择主题", theme.SettingsIcon(), func() {
 		themeSelector := widget.NewSelect([]string{"Light", "Dark"}, func(themeName string) {
 			// 当用户选择一个主题时，更新应用的主题
 			myApp.Settings().SetTheme(themes[themeName])
@@ -640,57 +645,67 @@ func main() {
 		})
 
 		dashboardWindow.Show()
-		currentDir, err := os.Getwd()
-		if err != nil {
-			fmt.Println(err)
-		}
-		if currentDir != "" {
-			//如果currentDir没有miniconda 则下载
-			minicondaPath := filepath.Join(currentDir, "miniconda")
-			_, err = os.Stat(minicondaPath)
-			if os.IsNotExist(err) {
-				err = bdfs.Download("miniconda", "miniconda.zip", currentDir)
-				if err != nil {
-					fmt.Println("failed to download file:", err)
-				}
 
-				if err != nil {
-					fmt.Println("failed to get current dir:", err)
-				}
-
-				for {
-
-					files, err := ioutil.ReadDir(currentDir)
+		go func() {
+			currentDir, err := os.Getwd()
+			if err != nil {
+				fmt.Println(err)
+			}
+			if currentDir != "" {
+				//如果currentDir没有miniconda 则下载
+				minicondaPath := filepath.Join(currentDir, "miniconda")
+				_, err = os.Stat(minicondaPath)
+				if os.IsNotExist(err) {
+					err = bdfs.Download("miniconda", "miniconda.zip", currentDir)
 					if err != nil {
-						fmt.Println("failed to read dir:", err)
-					}
-					downloading := false
-					for _, f := range files {
-						if strings.HasSuffix(f.Name(), ".BaiduPCS-Go-downloading") {
-							time.Sleep(time.Second * 2)
-							downloading = true
-							break
-						}
-					}
-					if downloading {
-						continue
+						fmt.Println("failed to download file:", err)
 					}
 
-					err = filepath.Walk(currentDir, func(path string, info os.FileInfo, err error) error {
+					if err != nil {
+						fmt.Println("failed to get current dir:", err)
+					}
+
+					for {
+
+						files, err := ioutil.ReadDir(currentDir)
 						if err != nil {
-							return err
+							fmt.Println("failed to read dir:", err)
 						}
-						if !info.IsDir() && strings.HasSuffix(info.Name(), ".zip") {
-							// 使用完整路径解压文件
-							err = bdfs.Unzip(path, currentDir)
-							if err != nil {
-								fmt.Println("failed to unzip file:", err)
+						downloading := false
+						for _, f := range files {
+							if strings.HasSuffix(f.Name(), ".BaiduPCS-Go-downloading") {
+								time.Sleep(time.Second * 2)
+								downloading = true
+								break
 							}
 						}
-						return nil
-					})
-					if err != nil {
-						log.Fatal(err)
+						if downloading {
+							continue
+						}
+
+						err = filepath.Walk(currentDir, func(path string, info os.FileInfo, err error) error {
+							if err != nil {
+								return err
+							}
+							if !info.IsDir() && strings.HasSuffix(info.Name(), ".zip") {
+								// 使用完整路径解压文件
+								err = bdfs.Unzip(path, currentDir)
+								if err != nil {
+									fmt.Println("failed to unzip file:", err)
+								}
+							}
+							return nil
+						})
+						if err != nil {
+							log.Fatal(err)
+						}
+
+						//删除miniconda.zip
+						err = os.RemoveAll(filepath.Join(currentDir, "miniconda.zip"))
+						if err != nil {
+							fmt.Println("failed to remove miniconda.zip:", err)
+						}
+						break
 					}
 
 					//删除miniconda.zip
@@ -698,21 +713,13 @@ func main() {
 					if err != nil {
 						fmt.Println("failed to remove miniconda.zip:", err)
 					}
-					break
-				}
 
-				//删除miniconda.zip
-				err = os.RemoveAll(filepath.Join(currentDir, "miniconda.zip"))
-				if err != nil {
-					fmt.Println("failed to remove miniconda.zip:", err)
+				} else if err != nil {
+					// 其他错误
+					log.Fatal(err)
 				}
-
-			} else if err != nil {
-				// 其他错误
-				log.Fatal(err)
 			}
-		}
-
+		}()
 	})
 
 	rentMachineButton.Importance = widget.LowImportance
@@ -808,18 +815,6 @@ func main() {
 	leftSplit.Add(buttonContainer)
 	// leftSplit里面新建个容器叫做leftbottom,支持滚动
 	leftbottom := container.NewVBox()
-	// 设置文本对齐方式
-	alignment := fyne.TextAlignCenter
-
-	// 创建一个新的文本样式
-	textStyle := fyne.TextStyle{Bold: true, Italic: true}
-
-	// 创建一个新的标签,可以滚动
-	label := widget.NewLabelWithStyle("你的文本", alignment, textStyle)
-
-	// 将标签添加到 leftbottom 容器
-	leftbottom.Add(label)
-	//设置leftbottom的字体大小
 
 	bottomInput = widget.NewMultiLineEntry()
 	bottomInput.SetPlaceHolder("键入命令")
@@ -1361,6 +1356,16 @@ func main() {
 	}()
 
 	myWindow.SetContent(mainSplit)
+	// 这里想关闭窗口时，将redis中的status置为0
+	myWindow.SetOnClosed(func() {
+		// 更新Redis数据,status置为0
+		ctx := context.Background()
+		err := rdb.HSet(ctx, uuidStr, "status", "0").Err()
+		if err != nil {
+			fmt.Println(err)
+		}
+	})
+
 	myWindow.ShowAndRun()
 	// 获取 editorVim 所在的 Canvas
 	canvas := fyne.CurrentApp().Driver().CanvasForObject(editorVim)

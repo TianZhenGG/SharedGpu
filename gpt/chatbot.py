@@ -7,7 +7,7 @@ import requests
 class chat_bot():
     def __init__(self):
         self.url = "https://openai-proxy-api.pages.dev/api/v1/chat/completions"
-        self.api_key = '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'
+        self.api_key = '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'
         self.headers = {
           'Authorization': f'Bearer {self.api_key}',
           'Content-Type': 'application/json'
