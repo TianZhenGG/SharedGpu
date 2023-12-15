@@ -165,20 +165,3 @@ func InitBdfs(bduss string) error {
 
 	return nil
 }
-
-func main() {
-	bduss := "N3NUNuR0J3dU0zdnFVTHV0dmxMSTlWZDQ4Q2dqYzRJNFpGY0VvbnhTVTZXcFZsSUFBQUFBJCQAAAAAAAAAAAEAAACm0-4~s~TLrrm10fjT4wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADrNbWU6zW1lMj"
-	err := InitBdfs(bduss)
-	if err != nil {
-		fmt.Println(err)
-	}
-	err = Download("e1aa6a13-df2a-5bc6-a3e4-c30ed0fd468e", "test.zip", "./")
-	if err != nil {
-		fmt.Println(err)
-	}
-	// err = Upload("test.go", "/")
-	// if err != nil {
-	// 	fmt.Println(err)
-	// }
-
-}
