@@ -24,6 +24,7 @@ import (
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/flopp/go-findfont"
 	"github.com/fsnotify/fsnotify"
 	"golang.org/x/crypto/ssh"
@@ -49,7 +50,10 @@ var (
 	selectedValue     string
 	selectmachineName string
 	changedFile       []string
+	exechangedFile    []string
 	quit              chan bool
+	exequit           chan bool
+	bucket            *oss.Bucket
 )
 
 var importPath string
@@ -97,6 +101,7 @@ func ListenFsNotify(globalProject string, changedFile *[]string, quit chan bool)
 
 					// 如果 event.Name 不存在于 changedFile 中，将其添加到 changedFile
 					if !exists {
+						fmt.Println(event.Name)
 						*changedFile = append(*changedFile, event.Name)
 					}
 				}
@@ -232,33 +237,6 @@ func showFolderContents(folderPath string, editorVim *widget.Entry, leftbottom *
 	leftbottom.Refresh()
 }
 
-type LeftAlignedButton struct {
-	widget.BaseWidget
-	Text     string
-	OnTapped func()
-}
-
-func NewLeftAlignedButton(text string, tapped func()) *LeftAlignedButton {
-	b := &LeftAlignedButton{
-		Text:     text,
-		OnTapped: tapped,
-	}
-	b.ExtendBaseWidget(b)
-	return b
-}
-
-func (b *LeftAlignedButton) CreateRenderer() fyne.WidgetRenderer {
-	label := canvas.NewText(b.Text, theme.ForegroundColor())
-	label.Alignment = fyne.TextAlignLeading
-	return widget.NewSimpleRenderer(label)
-}
-
-func (b *LeftAlignedButton) Tapped(*fyne.PointEvent) {
-	if b.OnTapped != nil {
-		b.OnTapped()
-	}
-}
-
 func main() {
 	myApp := app.NewWithID("myApp")
 
@@ -297,6 +275,7 @@ func main() {
 	err = fs.InitBdfs(bduss)
 	if err != nil {
 		fmt.Println("failed to login bd:", err)
+		//这里的bdfs接口要改成s3接口
 	}
 	// 挂载本地机器
 	mountedMachine = append(mountedMachine, "local")
@@ -791,27 +770,28 @@ func main() {
 					}
 
 					// 创建一个新的可以关闭的通道
-					quit = make(chan bool)
+					exequit = make(chan bool)
 
-					changedFile = []string{}
+					exechangedFile = []string{}
 
 					// 在一个新的 goroutine 中开始监听路径下的文件变化
-					go ListenFsNotify(globalProject, &changedFile, quit)
+					go ListenFsNotify(currentDir, &exechangedFile, exequit)
 
-					utils.ExecCommand(selectedValue, bottomInput, bottomPart, globalProject, uuidStr, rdb)
+					utils.ExecCommand(selectedValue, bottomInput, bottomPart, currentDir, uuidStr, rdb)
 
 					// 如果changedFile不是空的话
-					if len(changedFile) != 0 {
-						for _, filename := range changedFile {
+					if len(exechangedFile) != 0 {
+						for _, filename := range exechangedFile {
+							fmt.Println("exeFilepath", filename)
 							err = fs.Upload(filename, uuidStr)
 							if err != nil {
 								fmt.Println("failed to upload file:", err)
 							}
 						}
 					}
-					changedFileStr := strings.Join(changedFile, ", ")
+					exechangedFileStr := strings.Join(exechangedFile, ", ")
 					//将taskStatus置为0
-					err = rdb.HSet(ctx, uuidStr, "taskStatus", "0", "changedFile", changedFileStr, "updateTime", time.Now().Format("2006-01-02 15:04:05")).Err()
+					err = rdb.HSet(ctx, uuidStr, "taskStatus", "0", "changedFile", exechangedFileStr, "updateTime", time.Now().Format("2006-01-02 15:04:05")).Err()
 					if err != nil {
 						fmt.Println("failed to set taskStatus:", err)
 					}
@@ -940,7 +920,7 @@ func main() {
 		} else {
 			// 查看redis是不是有创建过任务，submitTime字段
 			// 查询 submitTime 字段
-			fmt.Println("远程==")
+			fmt.Println("远程=====================")
 			bottomPart.SetText("")
 			submitTime, err := rdb.HGet(ctx, uuidStr, "submitTime").Result()
 			fmt.Println("submitTime", submitTime)
@@ -981,11 +961,14 @@ func main() {
 				// 如果changedFile不是空的话
 				if len(changedFile) != 0 {
 					for _, filename := range changedFile {
-						err = fs.Upload(filename, uuidStr)
+						upfilePath := filepath.Join(globalProject, filename)
+						fmt.Println("upfilePath", upfilePath)
+						err = fs.Upload(upfilePath, uuidStr)
 						if err != nil {
 							fmt.Println("failed to upload file:", err)
 						}
 					}
+
 				}
 				bottomPart.SetText("任务再次创建1")
 				//changedFile []string to string
@@ -1007,13 +990,6 @@ func main() {
 				if err != nil {
 					fmt.Println("failed to get status:", err)
 				}
-
-				// log, err := rdb.HGet(ctx, uuidStr, "log").Result()
-				// if err != nil {
-				// 	fmt.Println("failed to get status:", err)
-				// }
-				// bottomPart.SetText(log)
-
 				if status == "0" {
 					// 获取执行日志
 					log, err := rdb.HGet(ctx, uuidStr, "log").Result()
@@ -1036,7 +1012,7 @@ func main() {
 							filename = filepath.Base(filename)
 							fmt.Println("filenaem", filename)
 							if filename != "." {
-								err := fs.Download(uuidStr, filename, "./")
+								err := fs.Download(uuidStr, filename, globalProject)
 								if err != nil {
 									fmt.Println(err)
 								}
@@ -1050,10 +1026,12 @@ func main() {
 						fmt.Println("failed to remove dir:", err)
 					}
 
+					//刷新leftbottom下的文件列表
+					showFolderContents(globalProject, globalEditorVim, globalLeftbottom)
+
 					break
 				}
 			}
-			changedFile = []string{}
 
 		}
 	})
@@ -1259,9 +1237,12 @@ func main() {
 	myWindow.SetOnClosed(func() {
 		// 更新Redis数据,status置为0
 		ctx := context.Background()
+		fmt.Println("Closing window, setting status to 0 for", uuidStr)
 		err := rdb.HSet(ctx, uuidStr, "status", "0").Err()
 		if err != nil {
-			fmt.Println(err)
+			fmt.Println("Error setting status to 0:", err)
+		} else {
+			fmt.Println("Successfully set status to 0")
 		}
 	})
 

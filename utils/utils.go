@@ -2,12 +2,16 @@ package utils
 
 import (
 	"bufio"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/md5"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"log"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -90,6 +94,7 @@ func GetSystemUsage() (cpuUsage, memoryUsage, diskUsage, networkUsage string, gp
 // 获取显卡信息
 func GetGPUMemoryUsage() (map[string]string, error) {
 	cmd := exec.Command("nvidia-smi", "--query-gpu=name,memory.used", "--format=csv,noheader,nounits")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("failed to run nvidia-smi: %v", err)
@@ -323,4 +328,32 @@ func ListenFsNotify(globalProject string, changedFile []string) {
 		log.Fatal(err)
 	}
 	<-done
+}
+
+func DecryptAES(key, ciphertext string) (string, error) {
+	block, err := aes.NewCipher([]byte(key))
+	if err != nil {
+		return "", err
+	}
+
+	decodedCiphertext, _ := base64.StdEncoding.DecodeString(ciphertext)
+
+	plaintext := make([]byte, len(decodedCiphertext))
+	stream := cipher.NewCFBDecrypter(block, []byte(key)[:block.BlockSize()])
+	stream.XORKeyStream(plaintext, decodedCiphertext)
+
+	return string(plaintext), nil
+}
+
+func RemoveRepByMap(slc []string) []string {
+	result := []string{}
+	tempMap := map[string]byte{} // 存放不重复主键
+	for _, e := range slc {
+		l := len(tempMap)
+		tempMap[e] = 0
+		if len(tempMap) != l { // 加入map后，map长度变化，则元素不重复
+			result = append(result, e)
+		}
+	}
+	return result
 }

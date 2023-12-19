@@ -6,6 +6,7 @@ replace github.com/qjfoidnh/BaiduPCS-Go v0.0.0-20231011165705-caa18a3765f3 => ./
 
 require (
 	fyne.io/fyne/v2 v2.4.2
+	github.com/aliyun/aliyun-oss-go-sdk v3.0.1+incompatible
 	github.com/flopp/go-findfont v0.1.0
 	github.com/fsnotify/fsnotify v1.6.0
 	github.com/gliderlabs/ssh v0.3.5
@@ -13,8 +14,8 @@ require (
 	github.com/google/uuid v1.1.2
 	github.com/qjfoidnh/BaiduPCS-Go v0.0.0-20231011165705-caa18a3765f3
 	github.com/shirou/gopsutil v3.21.11+incompatible
+	github.com/urfave/cli v1.22.5
 	golang.org/x/crypto v0.14.0
-	golang.org/x/sys v0.13.0
 )
 
 require (
@@ -66,13 +67,14 @@ require (
 	github.com/tidwall/pretty v1.0.2 // indirect
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
 	github.com/tklauser/numcpus v0.6.1 // indirect
-	github.com/urfave/cli v1.22.5 // indirect
 	github.com/yuin/goldmark v1.5.5 // indirect
 	github.com/yusufpapurcu/wmi v1.2.3 // indirect
 	golang.org/x/image v0.11.0 // indirect
 	golang.org/x/mobile v0.0.0-20230531173138-3c911d8e3eda // indirect
 	golang.org/x/net v0.17.0 // indirect
+	golang.org/x/sys v0.13.0 // indirect
 	golang.org/x/text v0.13.0 // indirect
+	golang.org/x/time v0.0.0-20191024005414-555d28b269f0 // indirect
 	google.golang.org/protobuf v1.26.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	honnef.co/go/js/dom v0.0.0-20210725211120-f030747120f2 // indirect

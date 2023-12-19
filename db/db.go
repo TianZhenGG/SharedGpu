@@ -2,10 +2,8 @@ package db
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"encoding/base64"
 	"fmt"
+	"sharedgpu/utils"
 	"strings"
 
 	"github.com/go-redis/redis/v8"
@@ -16,28 +14,13 @@ var rdb *redis.Client
 var encryptedAddr = "1vbshUShsWoE6NyjJ9JDTPs=" // 将这里替换为你的加密地址
 var secretAddr = "uKmzjka2sm4A"                // 将这里替换为你的明文地址
 
-func decryptAES(key, ciphertext string) (string, error) {
-	block, err := aes.NewCipher([]byte(key))
-	if err != nil {
-		return "", err
-	}
-
-	decodedCiphertext, _ := base64.StdEncoding.DecodeString(ciphertext)
-
-	plaintext := make([]byte, len(decodedCiphertext))
-	stream := cipher.NewCFBDecrypter(block, []byte(key)[:block.BlockSize()])
-	stream.XORKeyStream(plaintext, decodedCiphertext)
-
-	return string(plaintext), nil
-}
-
 func InitRedis(ctx context.Context) (*redis.Client, error) {
-	addr, err := decryptAES("the-key-has-to-be-32-bytes-long!", encryptedAddr)
+	addr, err := utils.DecryptAES("the-key-has-to-be-32-bytes-long!", encryptedAddr)
 	if err != nil {
 		return nil, err
 	}
 
-	sercret, err := decryptAES("the-key-has-to-be-32-bytes-long!", secretAddr)
+	sercret, err := utils.DecryptAES("the-key-has-to-be-32-bytes-long!", secretAddr)
 	if err != nil {
 		return nil, err
 	}
