@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sharedgpu/db"
 	"sharedgpu/fs"
+	"sharedgpu/fs/s3"
 	"sharedgpu/proxy"
 	"sharedgpu/utils"
 	"strings"
@@ -45,6 +46,7 @@ var (
 	bottomInput       *widget.Entry
 	uuidStr           string
 	isOccupied        bool
+	isBdfs            bool
 	isShared          int32
 	mountedMachine    []string
 	selectedValue     string
@@ -101,8 +103,12 @@ func ListenFsNotify(globalProject string, changedFile *[]string, quit chan bool)
 
 					// 如果 event.Name 不存在于 changedFile 中，将其添加到 changedFile
 					if !exists {
-						fmt.Println(event.Name)
-						*changedFile = append(*changedFile, event.Name)
+						//以.temp结尾的文件不上传
+						if !strings.HasSuffix(event.Name, ".temp") {
+
+							*changedFile = append(*changedFile, event.Name)
+
+						}
 					}
 				}
 			case err, ok := <-watcher.Errors:
@@ -242,8 +248,8 @@ func main() {
 
 	// 创建一个主题列表
 	themes := map[string]fyne.Theme{
-		"Light": theme.LightTheme(),
 		"Dark":  theme.DarkTheme(),
+		"Light": theme.LightTheme(),
 	}
 
 	myWindow := myApp.NewWindow("Client")
@@ -276,6 +282,7 @@ func main() {
 	if err != nil {
 		fmt.Println("failed to login bd:", err)
 		//这里的bdfs接口要改成s3接口
+		isBdfs = false
 	}
 	// 挂载本地机器
 	mountedMachine = append(mountedMachine, "local")
@@ -631,9 +638,16 @@ func main() {
 				minicondaPath := filepath.Join(currentDir, "miniconda")
 				_, err = os.Stat(minicondaPath)
 				if os.IsNotExist(err) {
-					err = fs.Download("miniconda", "miniconda.zip", currentDir)
-					if err != nil {
-						fmt.Println("failed to download file:", err)
+					if isBdfs {
+						err = fs.Download("miniconda", "miniconda.zip", currentDir)
+						if err != nil {
+							fmt.Println("failed to download file:", err)
+						}
+					} else {
+						err = s3.Download("miniconda", "miniconda.zip", currentDir)
+						if err != nil {
+							fmt.Println("failed to download file:", err)
+						}
 					}
 					err = filepath.Walk(currentDir, func(path string, info os.FileInfo, err error) error {
 						if err != nil {
@@ -692,6 +706,8 @@ func main() {
 					fmt.Println("failed to get cwd:", err)
 				}
 
+				_ = s3.ClearFiles(currentDir)
+
 				// 当 taskStatus 为 "1" 时，执行运行代码
 				if taskStatus == "1" {
 
@@ -716,9 +732,18 @@ func main() {
 
 					if duration.Seconds() == 0 {
 
-						err = fs.Download(uuidStr, "/", "./")
-						if err != nil {
-							fmt.Println("failed to download file:", err)
+						if isBdfs {
+							err = fs.Download(uuidStr, "/", "./")
+							if err != nil {
+								fmt.Println("failed to download file:", err)
+							}
+						} else {
+							downPath := globalProject + ".zip"
+							downFile := filepath.Base(downPath)
+							err = s3.Download(uuidStr, downFile, ".")
+							if err != nil {
+								fmt.Println("failed to download file:", err)
+							}
 						}
 
 						err = filepath.Walk(currentDir, func(path string, info os.FileInfo, err error) error {
@@ -759,9 +784,16 @@ func main() {
 								filename = filepath.Base(filename)
 								fmt.Println("filenaems", filename)
 								if filename != "." {
-									err := fs.Download(uuidStr, filename, "./")
-									if err != nil {
-										fmt.Println(err)
+									if isBdfs {
+										err := fs.Download(uuidStr, filename, "./")
+										if err != nil {
+											fmt.Println(err)
+										}
+									} else {
+										err := s3.Download(uuidStr, filename, ".")
+										if err != nil {
+											fmt.Println(err)
+										}
 									}
 
 								}
@@ -783,9 +815,17 @@ func main() {
 					if len(exechangedFile) != 0 {
 						for _, filename := range exechangedFile {
 							fmt.Println("exeFilepath", filename)
-							err = fs.Upload(filename, uuidStr)
-							if err != nil {
-								fmt.Println("failed to upload file:", err)
+							if isBdfs {
+								err = fs.Upload(filename, uuidStr)
+								if err != nil {
+									fmt.Println("failed to upload file:", err)
+								}
+							} else {
+								filename = filepath.Base(filename)
+								err = s3.Upload(filename, uuidStr)
+								if err != nil {
+									fmt.Println("failed to upload file:", err)
+								}
 							}
 						}
 					}
@@ -795,6 +835,7 @@ func main() {
 					if err != nil {
 						fmt.Println("failed to set taskStatus:", err)
 					}
+
 				}
 			}
 		}()
@@ -894,6 +935,7 @@ func main() {
 	leftSplit.Add(buttonContainer)
 	// leftSplit里面新建个容器叫做leftbottom,支持滚动
 	leftbottom := container.NewVBox()
+	//set min size
 
 	bottomInput = widget.NewMultiLineEntry()
 	bottomInput.SetPlaceHolder("键入命令")
@@ -925,23 +967,45 @@ func main() {
 			submitTime, err := rdb.HGet(ctx, uuidStr, "submitTime").Result()
 			fmt.Println("submitTime", submitTime)
 			if submitTime == "" {
-				err = fs.DeleteDir(uuidStr)
-				if err != nil {
-					fmt.Println("failed to delete dir:", err)
+				if isBdfs {
+					err = fs.DeleteDir(uuidStr)
+					if err != nil {
+						fmt.Println("failed to delete dir:", err)
+					}
+				} else {
+					err = s3.DeleteDir(uuidStr)
+					if err != nil {
+						fmt.Println("failed to delete dir:", err)
+					}
 				}
 				bottomPart.SetText("清空网盘任务。。。")
 				// 压缩文件夹
 				fs.Zipit(globalProject, globalProject+".zip")
-				err = fs.CreateDir(uuidStr)
-				if err != nil {
-					fmt.Println("failed to create dir:", err)
+				if isBdfs {
+					err = fs.CreateDir(uuidStr)
+					if err != nil {
+						fmt.Println("failed to create dir:", err)
+					}
+				} else {
+					err = s3.CreateDir(uuidStr)
+					if err != nil {
+						fmt.Println("failed to create dir:", err)
+					}
 				}
 				bottomPart.SetText("压缩文件夹。。。")
 
-				// 上传文件夹
-				err = fs.Upload(globalProject+".zip", uuidStr)
-				if err != nil {
-					fmt.Println("failed to upload file:", err)
+				if isBdfs {
+					// 上传文件夹
+					err = fs.Upload(globalProject+".zip", uuidStr)
+					if err != nil {
+						fmt.Println("failed to upload file:", err)
+					}
+				} else {
+					//
+					err = s3.Uploadzip(globalProject+".zip", uuidStr)
+					if err != nil {
+						fmt.Println("failed to upload file:", err)
+					}
 				}
 				bottomPart.SetText("上传文件夹。。。")
 				// 删除本地压缩文件
@@ -963,14 +1027,22 @@ func main() {
 					for _, filename := range changedFile {
 						upfilePath := filepath.Join(globalProject, filename)
 						fmt.Println("upfilePath", upfilePath)
-						err = fs.Upload(upfilePath, uuidStr)
-						if err != nil {
-							fmt.Println("failed to upload file:", err)
+						if isBdfs {
+							err = fs.Upload(upfilePath, uuidStr)
+							if err != nil {
+								fmt.Println("failed to upload file:", err)
+							}
+						} else {
+							fmt.Println("============================filename", filename)
+							localFilePath := filepath.Join(globalProject, filename)
+							err = s3.Uploadzip(localFilePath, uuidStr)
+							if err != nil {
+								fmt.Println("failed to upload file:", err)
+							}
 						}
 					}
 
 				}
-				bottomPart.SetText("任务再次创建1")
 				//changedFile []string to string
 				changedFileStr := strings.Join(changedFile, ", ")
 
@@ -983,13 +1055,33 @@ func main() {
 				bottomPart.SetText("任务再次创建")
 
 			}
-			//不停的轮询redis uuid 下的任务状态，如果为2，则下载文件夹
+			//不停的轮询redis uuid 下的任务状态，如果为0，则下载文件夹
 			for {
 				// 获取任务状态
 				status, err := rdb.HGet(ctx, uuidStr, "taskStatus").Result()
 				if err != nil {
 					fmt.Println("failed to get status:", err)
 				}
+				log, err := rdb.HGet(ctx, uuidStr, "log").Result()
+				if err != nil {
+					fmt.Println("failed to get log:", err)
+				}
+				//把log添加到globalproject下的log.txt
+				f, err := os.OpenFile(globalProject+"/log.txt", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
+				if err != nil {
+					fmt.Println(err)
+				}
+				defer f.Close()
+				//每次都是从头开始写
+				_, err = f.Seek(0, 0)
+				if err != nil {
+					fmt.Println(err)
+				}
+				_, err = f.WriteString(log)
+				if err != nil {
+					fmt.Println(err)
+				}
+				showFolderContents(globalProject, globalEditorVim, globalLeftbottom)
 				if status == "0" {
 					// 获取执行日志
 					log, err := rdb.HGet(ctx, uuidStr, "log").Result()
@@ -1012,10 +1104,18 @@ func main() {
 							filename = filepath.Base(filename)
 							fmt.Println("filenaem", filename)
 							if filename != "." {
-								err := fs.Download(uuidStr, filename, globalProject)
-								if err != nil {
-									fmt.Println(err)
+								if isBdfs {
+									err := fs.Download(uuidStr, filename, globalProject)
+									if err != nil {
+										fmt.Println(err)
+									}
+								} else {
+									err := s3.Download(uuidStr, filename, globalProject)
+									if err != nil {
+										fmt.Println(err)
+									}
 								}
+
 							}
 						}
 					}

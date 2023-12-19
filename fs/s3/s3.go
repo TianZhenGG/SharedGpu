@@ -1,8 +1,13 @@
-package main
+package s3
 
 import (
 	"fmt"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"regexp"
 	"sharedgpu/utils"
+	"strings"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 )
@@ -39,10 +44,52 @@ func init() {
 
 }
 
+func ClearFiles(currentDir string) error {
+	tempFilePattern := `^\.temp\d+$`
+	tempFileRegexp := regexp.MustCompile(tempFilePattern)
+
+	err := filepath.Walk(currentDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if !info.IsDir() && (strings.HasSuffix(info.Name(), ".zip") || tempFileRegexp.MatchString(info.Name())) {
+			err = os.Remove(path)
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+
+	return err
+}
+
 func Upload(localFile, remoteDir string) error {
 	// 上传文件
+
 	remoteFile := remoteDir + "/" + localFile
 	err := bucket.PutObjectFromFile(remoteFile, localFile)
+	return err
+}
+
+func Uploadzip(localFile, remoteDir string) error {
+	// 上传文件
+
+	remoteFile := remoteDir + "/" + filepath.Base(localFile)
+	err := bucket.PutObjectFromFile(remoteFile, localFile)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return err
+	}
+	tempFile, err := ioutil.TempFile(".", ".temp")
+	if err != nil {
+		fmt.Println("failed to create temp file:", err)
+		return err
+	}
+	defer os.Remove(tempFile.Name())
+
 	return err
 }
 
@@ -58,18 +105,26 @@ func DeleteDir(remoteDir string) error {
 	return err
 }
 
-func Download(remoteFile, localDir string) error {
-	// 下载文件
-	localFile := localDir + "/" + remoteFile
+func Download(remoteDir, remoteFile string, savepath string) error {
+	localFile := savepath + "/" + remoteFile
+
+	remoteFile = remoteDir + "/" + remoteFile
+	fmt.Println("remoteFile:", remoteFile)
+	fmt.Println("localFile:", localFile)
 	err := bucket.GetObjectToFile(remoteFile, localFile)
+	_ = ClearFiles(savepath)
 	return err
 }
 
 func main() {
 	// 上传文件
-	err := Upload("fs/s3/s3.go", "e1aa6a13-df2a-5bc6-a3e4-c30ed0fd468e")
+	// err := Upload("miniconda.zip", "e1aa6a13-df2a-5bc6-a3e4-c30ed0fd468e")
+	// if err != nil {
+	// 	fmt.Println("Error:", err)
+	// }
+	err := Download("e1aa6a13-df2a-5bc6-a3e4-c30ed0fd468e", "", ".")
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Println("failed to download file:", err)
 	}
 
 }
