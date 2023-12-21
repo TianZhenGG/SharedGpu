@@ -2,6 +2,7 @@ package utils
 
 import (
 	"bufio"
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/md5"
@@ -142,7 +143,7 @@ func GetSystemInfo() (cpuInfo, memoryInfo, gpuInfo string, err error) {
 	return cpuInfo, memoryInfo, gpuInfo, nil
 }
 
-func ExecCommand(execType string, bottomInput *widget.Entry, bottomPart *widget.Label, globalProject string, uuidStr string, rdb *redis.Client) {
+func ExecCommand(execType string, bottomInput *widget.Entry, bottomPart *widget.Entry, globalProject string, uuidStr string, rdb *redis.Client, ExeCtx context.Context, ExeCancel context.CancelFunc) {
 	var inputText string
 	ctx := rdb.Context()
 	// 根据execType判断是执行本地还是执行远程
@@ -179,7 +180,7 @@ func ExecCommand(execType string, bottomInput *widget.Entry, bottomPart *widget.
 	// 切分 bottomInput.Text
 	args := strings.Fields(inputText)
 	fmt.Println("args", args)
-	cmd := exec.Command(args[0], args[1:]...)
+	cmd := exec.CommandContext(ExeCtx, args[0], args[1:]...)
 	cmd.SysProcAttr = &windows.SysProcAttr{HideWindow: true}
 	// 获取命令的输出
 	stdout, err := cmd.StdoutPipe()

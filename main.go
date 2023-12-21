@@ -42,7 +42,8 @@ var (
 	// 定义一个全局的 leftline 变量
 	leftline          = widget.NewMultiLineEntry()
 	labelout          *widget.Label
-	bottomPart        *widget.Label
+	bottomPart        *widget.Entry
+	bottomPartScroll  *container.Scroll
 	bottomInput       *widget.Entry
 	uuidStr           string
 	isOccupied        bool
@@ -99,12 +100,27 @@ func ListenFsNotify(globalProject string, changedFile *[]string, quit chan bool)
 							exists = true
 							break
 						}
+
+					}
+
+					//如果是文件夹
+					fileInfo, err := os.Stat(event.Name)
+					if err != nil {
+						fmt.Println("failed to get file info:", err)
+					}
+					if fileInfo.IsDir() {
+						//如果存在同名的压缩包则跳过
+						if strings.HasSuffix(event.Name, ".zip") {
+							continue
+						}
+						fs.Zipit(event.Name, event.Name+".zip")
+						event.Name = event.Name + ".zip"
 					}
 
 					// 如果 event.Name 不存在于 changedFile 中，将其添加到 changedFile
 					if !exists {
 						//以.temp结尾的文件不上传
-						if !strings.HasSuffix(event.Name, ".temp") {
+						if !strings.HasSuffix(event.Name, "__") {
 
 							*changedFile = append(*changedFile, event.Name)
 
@@ -216,6 +232,11 @@ func showFolderContents(folderPath string, editorVim *widget.Entry, leftbottom *
 	for _, f := range files {
 		file := f // 创建一个新的变量来存储当前的文件
 
+		//如果以.开头则跳过
+		if strings.HasPrefix(file.Name(), ".") {
+			continue
+		}
+
 		// 捕获当前的文件路径
 		currentFilePath := filepath.Join(folderPath, file.Name())
 
@@ -268,6 +289,9 @@ func main() {
 	// 创建一个 context.Context 对象
 	ctx := context.Background()
 	ctxTask, cancelTask := context.WithCancel(ctx)
+	//exec ctx
+	ExeCtx, ExeCancel := context.WithCancel(context.Background())
+	ExeAllCtx, ExeAllCancel := context.WithCancel(context.Background())
 
 	rdb, err := db.InitRedis(ctx)
 	if err != nil {
@@ -332,8 +356,6 @@ func main() {
 			if startTime.IsZero() {
 				startTime = time.Now()
 			}
-
-			//想把下面的程序改成0.5s执行一次去redis里面查询是否有匹配的机器，如果有则显示连接成功，如果没有则显示暂无资源
 
 			var ConnKey string
 
@@ -669,9 +691,19 @@ func main() {
 						fmt.Println("failed to remove miniconda.zip:", err)
 					}
 
+					err = rdb.HSet(ctx, uuidStr, "status", "0").Err()
+					if err != nil {
+						fmt.Println("failed to set info to redis :", err)
+					}
+
 				} else if err != nil {
 					// 其他错误
 					log.Fatal(err)
+				} else {
+					err = rdb.HSet(ctx, uuidStr, "status", "0").Err()
+					if err != nil {
+						fmt.Println("failed to set info to redis :", err)
+					}
 				}
 			}
 		}()
@@ -809,7 +841,7 @@ func main() {
 					// 在一个新的 goroutine 中开始监听路径下的文件变化
 					go ListenFsNotify(currentDir, &exechangedFile, exequit)
 
-					utils.ExecCommand(selectedValue, bottomInput, bottomPart, currentDir, uuidStr, rdb)
+					utils.ExecCommand(selectedValue, bottomInput, bottomPart, currentDir, uuidStr, rdb, ExeCtx, ExeCancel)
 
 					// 如果changedFile不是空的话
 					if len(exechangedFile) != 0 {
@@ -843,8 +875,6 @@ func main() {
 	})
 
 	rentMachineButton.Importance = widget.LowImportance
-	// 创建一个新的容器
-	leftSplit := container.NewVBox()
 
 	// 创建一个新的水平容器
 	buttonContainer := container.NewHBox()
@@ -932,10 +962,11 @@ func main() {
 	buttonContainer.Add(saveButton)
 	buttonContainer.Add(backButton)
 
-	leftSplit.Add(buttonContainer)
-	// leftSplit里面新建个容器叫做leftbottom,支持滚动
 	leftbottom := container.NewVBox()
-	//set min size
+	leftbottomScroll := container.NewVScroll(leftbottom)
+
+	leftSplit := container.NewVSplit(buttonContainer, leftbottomScroll)
+	leftSplit.SetOffset(0.01)
 
 	bottomInput = widget.NewMultiLineEntry()
 	bottomInput.SetPlaceHolder("键入命令")
@@ -946,8 +977,11 @@ func main() {
 	editorVim := widget.NewMultiLineEntry()
 
 	// 创建新的按钮
-	debugButton := widget.NewButton("GPT", func() {
+	debugButton := widget.NewButton("取消", func() {
 		// 按钮的点击事件处理函数
+		ExeCancel()
+		ExeAllCancel()
+		fmt.Println("取消执行")
 	})
 
 	executeButton := widget.NewButton("执行", func() {
@@ -955,185 +989,189 @@ func main() {
 			bottomPart.SetText("请选择机器")
 			return
 		}
+		go func() {
 
-		if selectedValue == "local" {
-			fmt.Println("local")
-			utils.ExecCommand(selectedValue, bottomInput, bottomPart, globalProject, uuidStr, rdb)
-		} else {
-			// 查看redis是不是有创建过任务，submitTime字段
-			// 查询 submitTime 字段
-			fmt.Println("远程=====================")
-			bottomPart.SetText("")
-			submitTime, err := rdb.HGet(ctx, uuidStr, "submitTime").Result()
-			fmt.Println("submitTime", submitTime)
-			if submitTime == "" {
-				if isBdfs {
-					err = fs.DeleteDir(uuidStr)
-					if err != nil {
-						fmt.Println("failed to delete dir:", err)
-					}
-				} else {
-					err = s3.DeleteDir(uuidStr)
-					if err != nil {
-						fmt.Println("failed to delete dir:", err)
-					}
-				}
-				bottomPart.SetText("清空网盘任务。。。")
-				// 压缩文件夹
-				fs.Zipit(globalProject, globalProject+".zip")
-				if isBdfs {
-					err = fs.CreateDir(uuidStr)
-					if err != nil {
-						fmt.Println("failed to create dir:", err)
-					}
-				} else {
-					err = s3.CreateDir(uuidStr)
-					if err != nil {
-						fmt.Println("failed to create dir:", err)
-					}
-				}
-				bottomPart.SetText("压缩文件夹。。。")
-
-				if isBdfs {
-					// 上传文件夹
-					err = fs.Upload(globalProject+".zip", uuidStr)
-					if err != nil {
-						fmt.Println("failed to upload file:", err)
-					}
-				} else {
-					//
-					err = s3.Uploadzip(globalProject+".zip", uuidStr)
-					if err != nil {
-						fmt.Println("failed to upload file:", err)
-					}
-				}
-				bottomPart.SetText("上传文件夹。。。")
-				// 删除本地压缩文件
-				err = os.Remove(globalProject + ".zip")
-				if err != nil {
-					fmt.Println("failed to remove file:", err)
-				}
-				// 更新redis uuid 下的任务状态为有任务需要执行，并将提交时间更新为当前时间
-				err = rdb.HSet(ctx, uuidStr, "cmd", bottomInput.Text, "taskStatus", "1", "log", "", "updateTime", time.Now().Format("2006-01-02 15:04:05"), "submitTime", time.Now().Format("2006-01-02 15:04:05")).Err()
-				if err != nil {
-					fmt.Println("failed to set info to redis :", err)
-				}
-				bottomPart.SetText("任务已创建")
-			} else {
-				fmt.Println("changedFile", changedFile)
-
-				// 如果changedFile不是空的话
-				if len(changedFile) != 0 {
-					for _, filename := range changedFile {
-						upfilePath := filepath.Join(globalProject, filename)
-						fmt.Println("upfilePath", upfilePath)
-						if isBdfs {
-							err = fs.Upload(upfilePath, uuidStr)
-							if err != nil {
-								fmt.Println("failed to upload file:", err)
-							}
-						} else {
-							fmt.Println("============================filename", filename)
-							localFilePath := filepath.Join(globalProject, filename)
-							err = s3.Uploadzip(localFilePath, uuidStr)
-							if err != nil {
-								fmt.Println("failed to upload file:", err)
-							}
-						}
-					}
-
-				}
-				//changedFile []string to string
-				changedFileStr := strings.Join(changedFile, ", ")
-
-				// 更新redis uuid 下的任务状态为有任务需要执行，并将提交时间更新为当前时间，cmd更新为bottomInput.Text
-				err = rdb.HSet(ctx, uuidStr, "cmd", bottomInput.Text, "changedFile", changedFileStr, "taskStatus", "1", "updateTime", time.Now().Format("2006-01-02 15:04:05")).Err()
-				if err != nil {
-					fmt.Println("failed to set info to redis :", err)
-				}
-
-				bottomPart.SetText("任务再次创建")
-
-			}
-			//不停的轮询redis uuid 下的任务状态，如果为0，则下载文件夹
 			for {
-				// 获取任务状态
-				status, err := rdb.HGet(ctx, uuidStr, "taskStatus").Result()
-				if err != nil {
-					fmt.Println("failed to get status:", err)
-				}
-				log, err := rdb.HGet(ctx, uuidStr, "log").Result()
-				if err != nil {
-					fmt.Println("failed to get log:", err)
-				}
-				//把log添加到globalproject下的log.txt
-				f, err := os.OpenFile(globalProject+"/log.txt", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
-				if err != nil {
-					fmt.Println(err)
-				}
-				defer f.Close()
-				//每次都是从头开始写
-				_, err = f.Seek(0, 0)
-				if err != nil {
-					fmt.Println(err)
-				}
-				_, err = f.WriteString(log)
-				if err != nil {
-					fmt.Println(err)
-				}
-				showFolderContents(globalProject, globalEditorVim, globalLeftbottom)
-				if status == "0" {
-					// 获取执行日志
-					log, err := rdb.HGet(ctx, uuidStr, "log").Result()
-					if err != nil {
-						fmt.Println("failed to get log:", err)
-					}
-					bottomPart.SetText(log)
+				select {
+				case <-ExeAllCtx.Done():
+					fmt.Println("Goroutine cancelled")
+					// 重置 context 和 cancel 函数
+					ExeAllCtx, ExeAllCancel = context.WithCancel(context.Background())
+					ExeCtx, ExeCancel = context.WithCancel(context.Background())
+					return
+				default:
 
-					changedFileStr, err := rdb.HGet(ctx, uuidStr, "changedFile").Result()
-					if err != nil {
-						fmt.Println(err)
-					}
-					// string changedFileStr to []sting
-					changedFile := strings.Split(changedFileStr, ", ")
-					// 如果changedFile不是空的则下载文件到当前目录
-					if len(changedFile) != 0 {
-						// 使用 range 关键字遍历字符串切片
-						for _, filename := range changedFile {
-							//split filename,最后一个/后面的就是文件名
-							filename = filepath.Base(filename)
-							fmt.Println("filenaem", filename)
-							if filename != "." {
-								if isBdfs {
-									err := fs.Download(uuidStr, filename, globalProject)
-									if err != nil {
-										fmt.Println(err)
-									}
-								} else {
-									err := s3.Download(uuidStr, filename, globalProject)
-									if err != nil {
-										fmt.Println(err)
+					if selectedValue == "local" {
+						fmt.Println("local")
+						utils.ExecCommand(selectedValue, bottomInput, bottomPart, globalProject, uuidStr, rdb, ExeCtx, ExeCancel)
+					} else {
+						// 查看redis是不是有创建过任务，submitTime字段
+						// 查询 submitTime 字段
+						fmt.Println("远程=====================")
+						bottomPart.SetText("")
+						submitTime, err := rdb.HGet(ctx, uuidStr, "submitTime").Result()
+						fmt.Println("submitTime", submitTime)
+						if submitTime == "" {
+							if isBdfs {
+								err = fs.DeleteDir(uuidStr)
+								if err != nil {
+									fmt.Println("failed to delete dir:", err)
+								}
+							} else {
+								err = s3.DeleteDir(uuidStr)
+								if err != nil {
+									fmt.Println("failed to delete dir:", err)
+								}
+							}
+							bottomPart.SetText("清空网盘任务。。。")
+							// 压缩文件夹
+							fs.Zipit(globalProject, globalProject+".zip")
+							if isBdfs {
+								err = fs.CreateDir(uuidStr)
+								if err != nil {
+									fmt.Println("failed to create dir:", err)
+								}
+							} else {
+								err = s3.CreateDir(uuidStr)
+								if err != nil {
+									fmt.Println("failed to create dir:", err)
+								}
+							}
+							bottomPart.SetText("压缩文件夹。。。")
+
+							if isBdfs {
+								// 上传文件夹
+								err = fs.Upload(globalProject+".zip", uuidStr)
+								if err != nil {
+									fmt.Println("failed to upload file:", err)
+								}
+							} else {
+								//
+								err = s3.Uploadzip(globalProject+".zip", uuidStr)
+								if err != nil {
+									fmt.Println("failed to upload file:", err)
+								}
+							}
+							bottomPart.SetText("上传文件夹。。。")
+							// 删除本地压缩文件
+							err = os.Remove(globalProject + ".zip")
+							if err != nil {
+								fmt.Println("failed to remove file:", err)
+							}
+							// 更新redis uuid 下的任务状态为有任务需要执行，并将提交时间更新为当前时间
+							err = rdb.HSet(ctx, uuidStr, "cmd", bottomInput.Text, "taskStatus", "1", "log", "", "updateTime", time.Now().Format("2006-01-02 15:04:05"), "submitTime", time.Now().Format("2006-01-02 15:04:05")).Err()
+							if err != nil {
+								fmt.Println("failed to set info to redis :", err)
+							}
+							bottomPart.SetText("任务已创建")
+						} else {
+							fmt.Println("changedFile", changedFile)
+
+							// 如果changedFile不是空的话
+							if len(changedFile) != 0 {
+								for _, filename := range changedFile {
+									upfilePath := filepath.Join(globalProject, filename)
+									fmt.Println("upfilePath", upfilePath)
+									if isBdfs {
+										err = fs.Upload(upfilePath, uuidStr)
+										if err != nil {
+											fmt.Println("failed to upload file:", err)
+										}
+									} else {
+										fmt.Println("============================filename", filename)
+										localFilePath := filepath.Join(globalProject, filename)
+										err = s3.Uploadzip(localFilePath, uuidStr)
+										if err != nil {
+											fmt.Println("failed to upload file:", err)
+										}
 									}
 								}
 
 							}
+							//changedFile []string to string
+							changedFileStr := strings.Join(changedFile, ", ")
+
+							// 更新redis uuid 下的任务状态为有任务需要执行，并将提交时间更新为当前时间，cmd更新为bottomInput.Text
+							err = rdb.HSet(ctx, uuidStr, "cmd", bottomInput.Text, "changedFile", changedFileStr, "taskStatus", "1", "updateTime", time.Now().Format("2006-01-02 15:04:05")).Err()
+							if err != nil {
+								fmt.Println("failed to set info to redis :", err)
+							}
+
+							bottomPart.SetText("任务再次创建")
+
 						}
+						//不停的轮询redis uuid 下的任务状态，如果为0，则下载文件夹
+						for {
+							// 获取任务状态
+							status, err := rdb.HGet(ctx, uuidStr, "taskStatus").Result()
+							if err != nil {
+								fmt.Println("failed to get status:", err)
+							}
+							log, err := rdb.HGet(ctx, uuidStr, "log").Result()
+							if err != nil {
+								fmt.Println("failed to get log:", err)
+							}
+							//如果log和bottomPart.Text最后一行不一样则更新bottomPart.Text
+							if bottomPart.Text != "" {
+								if strings.Split(bottomPart.Text, "\n")[len(strings.Split(bottomPart.Text, "\n"))-1] != log {
+									bottomPart.SetText(bottomPart.Text + "\n" + log)
+									//显示最后一行
+									bottomPartScroll.ScrollToBottom()
+								}
+							}
+							//设置100行则清除前50行
+							if len(strings.Split(bottomPart.Text, "\n")) > 100 {
+								bottomPart.Text = strings.Join(strings.Split(bottomPart.Text, "\n")[50:], "\n")
+							}
+							if status == "0" {
+
+								changedFileStr, err := rdb.HGet(ctx, uuidStr, "changedFile").Result()
+								if err != nil {
+									fmt.Println(err)
+								}
+								// string changedFileStr to []sting
+								changedFile := strings.Split(changedFileStr, ", ")
+								// 如果changedFile不是空的则下载文件到当前目录
+								if len(changedFile) != 0 {
+									// 使用 range 关键字遍历字符串切片
+									for _, filename := range changedFile {
+										//split filename,最后一个/后面的就是文件名
+										filename = filepath.Base(filename)
+										fmt.Println("filenaem", filename)
+										if filename != "." {
+											if isBdfs {
+												err := fs.Download(uuidStr, filename, globalProject)
+												if err != nil {
+													fmt.Println(err)
+												}
+											} else {
+												err := s3.Download(uuidStr, filename, globalProject)
+												if err != nil {
+													fmt.Println(err)
+												}
+											}
+
+										}
+									}
+								}
+
+								//删除本地uuidStr下的压缩包
+								err = os.RemoveAll(globalProject + "/" + uuidStr)
+								if err != nil {
+									fmt.Println("failed to remove dir:", err)
+								}
+
+								//刷新leftbottom下的文件列表
+								showFolderContents(globalProject, globalEditorVim, globalLeftbottom)
+
+								return
+							}
+						}
+
 					}
-
-					//删除本地uuidStr下的压缩包
-					err = os.RemoveAll(globalProject + "/" + uuidStr)
-					if err != nil {
-						fmt.Println("failed to remove dir:", err)
-					}
-
-					//刷新leftbottom下的文件列表
-					showFolderContents(globalProject, globalEditorVim, globalLeftbottom)
-
-					break
 				}
 			}
-
-		}
+		}()
 	})
 	// 竖直布局
 	buttonBox := container.NewVBox(debugButton, executeButton)
@@ -1156,7 +1194,8 @@ func main() {
 	// 创建一个新的显示区域
 	labelout = widget.NewLabel("输出区域")
 	// 创建一个空的部件作为下部分
-	bottomPart = widget.NewLabel("")
+	bottomPart = widget.NewEntry()
+	bottomPartScroll = container.NewVScroll(bottomPart)
 	// 创建一个按钮
 	button := widget.NewButton("取消挂载机器", func() {
 		//点击取消挂载机器的时候，将轮询redis的任务关掉
@@ -1188,7 +1227,7 @@ func main() {
 	topPart.Offset = 0.9 // 设置 labelout 和 button 的大小比例为 9:1
 
 	// 将 topPart 和 bottomPart 添加到一个新的 VSplit 中
-	labeloutSplit := container.NewVSplit(topPart, bottomPart)
+	labeloutSplit := container.NewVSplit(topPart, bottomPartScroll)
 	labeloutSplit.Offset = 0.1 // 设置 topPart 和 bottomPart 的大小比例为 1:9
 
 	// 创建一个可以滚动的容器
@@ -1223,18 +1262,12 @@ func main() {
 					globalFolderPath = uri.Path()
 					globalProject = uri.Path()
 					globalEditorVim = editorVim
-					//空fyne.Container
-					// 从 leftSplit 中移除旧的 leftbottom 容器
-					leftSplit.Remove(leftbottom)
-					// 创建一个新的 leftbottom 容器来替换旧的
-					leftbottom = fyne.NewContainerWithLayout(layout.NewVBoxLayout())
+
 					globalLeftbottom = leftbottom
 					importPath = uri.Path()
 
 					showFolderContents(globalFolderPath, globalEditorVim, globalLeftbottom)
 
-					leftSplit.Add(leftbottom)
-					// 导入完成后，隐藏对话框
 					customDialog.Hide()
 				} else {
 					customDialog.Hide()
@@ -1326,11 +1359,11 @@ func main() {
 	editorVimSplit.Offset = 0.9
 	// 创建一个新的 Split 来包含 leftMenu 和 leftSplit
 	menuSplit := container.NewHSplit(leftMenu, leftSplit)
-	menuSplit.Offset = 0.9 // 调整宽度，使左侧菜单更窄
+	menuSplit.Offset = 0.5 // 调整宽度，使左侧菜单更窄
 
 	// 创建一个新的 Split 来包含 menuSplit 和 editorVimSplit
 	mainSplit := container.NewHSplit(menuSplit, editorVimSplit)
-	mainSplit.Offset = 0.2 // 调整位置
+	mainSplit.Offset = 0.1 // 调整位置
 
 	myWindow.SetContent(mainSplit)
 	// 这里想关闭窗口时，将redis中的status置为0
