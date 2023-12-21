@@ -104,18 +104,18 @@ func ListenFsNotify(globalProject string, changedFile *[]string, quit chan bool)
 					}
 
 					//如果是文件夹
-					fileInfo, err := os.Stat(event.Name)
-					if err != nil {
-						fmt.Println("failed to get file info:", err)
-					}
-					if fileInfo.IsDir() {
-						//如果存在同名的压缩包则跳过
-						if strings.HasSuffix(event.Name, ".zip") {
-							continue
-						}
-						fs.Zipit(event.Name, event.Name+".zip")
-						event.Name = event.Name + ".zip"
-					}
+					// fileInfo, err := os.Stat(event.Name)
+					// if err != nil {
+					// 	fmt.Println("failed to get file info:", err)
+					// }
+					// if fileInfo.IsDir() {
+					// 	//如果存在同名的压缩包则跳过
+					// 	if strings.HasSuffix(event.Name, ".zip") {
+					// 		continue
+					// 	}
+					// 	fs.Zipit(event.Name, event.Name+".zip")
+					// 	event.Name = event.Name + ".zip"
+					// }
 
 					// 如果 event.Name 不存在于 changedFile 中，将其添加到 changedFile
 					if !exists {
