@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"path"
 	"strings"
 	"time"
 
@@ -170,17 +171,23 @@ func ExecCommand(execType string, bottomInput *widget.Entry, bottomPart *widget.
 	//清空bottomInput
 	bottomInput.SetText("")
 
+	// miniconda dir globalProject 去掉 uuidStr
+	minicondaDir := strings.Replace(globalProject, uuidStr, "", -1)
+	// 加上miniconda/python.exe
+	minicondaDir = path.Join(minicondaDir, "miniconda/python.exe ")
+
 	//解析输入的文本，如果是python或者是python3，改成miniconda/python.exe
 	// 解析输入的文本，如果是python或者是python3，改成miniconda/python.exe
-	inputText = strings.Replace(inputText, "python ", "miniconda/python.exe ", -1)
-	inputText = strings.Replace(inputText, "python3 ", "miniconda/python.exe ", -1)
-	inputText = strings.Replace(inputText, "pip ", "miniconda/python.exe -m pip ", -1)
-	inputText = strings.Replace(inputText, "pip3 ", "miniconda/python.exe -m pip ", -1)
+	inputText = strings.Replace(inputText, "python ", minicondaDir, -1)
+	inputText = strings.Replace(inputText, "python3 ", minicondaDir, -1)
+	inputText = strings.Replace(inputText, "pip ", minicondaDir+" -m pip ", -1)
+	inputText = strings.Replace(inputText, "pip3 ", minicondaDir+" -m pip ", -1)
 
 	// 切分 bottomInput.Text
 	args := strings.Fields(inputText)
 	fmt.Println("args", args)
 	cmd := exec.CommandContext(ExeCtx, args[0], args[1:]...)
+	cmd.Dir = globalProject
 	cmd.SysProcAttr = &windows.SysProcAttr{HideWindow: true}
 	// 获取命令的输出
 	stdout, err := cmd.StdoutPipe()

@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"sharedgpu/db"
 	"sharedgpu/fs"
@@ -27,7 +28,6 @@ import (
 	"fyne.io/fyne/v2/widget"
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/flopp/go-findfont"
-	"github.com/fsnotify/fsnotify"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -52,13 +52,13 @@ var (
 	mountedMachine    []string
 	selectedValue     string
 	selectmachineName string
-	changedFile       []string
-	exechangedFile    []string
-	quit              chan bool
-	exequit           chan bool
 	bucket            *oss.Bucket
+	myWindow          fyne.Window
+	myApp             fyne.App
 )
 
+// 文件最大读取
+var maxFileSize int64 = 1024 * 1024
 var importPath string
 
 // 定义 displayArea 为全局变量
@@ -77,79 +77,84 @@ func init() {
 	}
 }
 
-func ListenFsNotify(globalProject string, changedFile *[]string, quit chan bool) {
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer watcher.Close()
-
-	done := make(chan bool)
-	go func() {
-		for {
-			select {
-			case event, ok := <-watcher.Events:
-				if !ok {
-					return
-				}
-				if event.Op&fsnotify.Write == fsnotify.Write {
-					// 检查 event.Name 是否已经存在于 changedFile 中
-					exists := false
-					for _, file := range *changedFile {
-						if file == event.Name {
-							exists = true
-							break
-						}
-
-					}
-
-					//如果是文件夹
-					// fileInfo, err := os.Stat(event.Name)
-					// if err != nil {
-					// 	fmt.Println("failed to get file info:", err)
-					// }
-					// if fileInfo.IsDir() {
-					// 	//如果存在同名的压缩包则跳过
-					// 	if strings.HasSuffix(event.Name, ".zip") {
-					// 		continue
-					// 	}
-					// 	fs.Zipit(event.Name, event.Name+".zip")
-					// 	event.Name = event.Name + ".zip"
-					// }
-
-					// 如果 event.Name 不存在于 changedFile 中，将其添加到 changedFile
-					if !exists {
-						//以.temp结尾的文件不上传
-						if !strings.HasSuffix(event.Name, "__") {
-
-							*changedFile = append(*changedFile, event.Name)
-
-						}
-					}
-				}
-			case err, ok := <-watcher.Errors:
-				if !ok {
-					return
-				}
-				log.Println("error:", err)
-			case <-quit:
-				// 当 quit 通道关闭时，退出循环
-				return
-			}
-		}
-	}()
-
-	err = watcher.Add(globalProject)
-	if err != nil {
-		log.Fatal(err)
-	}
-	<-done
-}
-
 func readFile(currentFilePath string, editorVim *widget.Entry) {
 	// 检查文件是否存在
 	if _, err := os.Stat(currentFilePath); os.IsNotExist(err) {
 		fyne.LogError("文件不存在", err)
+		return
+	}
+
+	// 检查文件是否存在
+	fileInfo, err := os.Stat(currentFilePath)
+	if os.IsNotExist(err) {
+		fyne.LogError("文件不存在", err)
+		return
+	}
+
+	// 检查文件类型
+	ext := filepath.Ext(currentFilePath)
+	if ext == ".jpg" || ext == ".png" || ext == ".gif" || ext == ".bmp" || ext == ".jpeg" || ext == ".webp" {
+		// fyne起线程去显示图片
+
+	} else {
+		// 检查文件大小
+		if fileInfo.Size() > maxFileSize {
+			fyne.LogError("文件过大", err)
+			return
+		}
+
+		// 检查路径是否为空
+		if currentFilePath == "" {
+			fyne.LogError("路径为空", err)
+			return
+		}
+
+		// 更新 globalFilePath
+		globalFilePath = currentFilePath
+
+		// 如果是文件，打开文件
+		f, err := os.Open(currentFilePath)
+		if err != nil {
+			fyne.LogError("无法打开文件", err)
+			return
+		}
+		defer f.Close()
+
+		// 读取文件内容
+		content, err := ioutil.ReadAll(f)
+		if err != nil {
+			fyne.LogError("无法读取文件", err)
+			return
+		}
+
+		// 计算文件的行数
+		lines := strings.Split(string(content), "\n")
+
+		// 在 leftline 中显示行号
+		lineNumbers := ""
+		for i := 1; i <= len(lines); i++ {
+			lineNumbers += fmt.Sprintf("%d\n", i)
+		}
+		leftline.SetText(lineNumbers)
+
+		// 将文件内容显示在编辑器中
+		//用canvas.NewText()来设置字体颜色
+		contentObj := canvas.NewText(string(content), color.RGBA{255, 255, 255, 255})
+		//设置字体大小
+		contentObj.TextSize = 20
+		contentStr := contentObj.Text
+		editorVim.SetText(string(contentStr))
+	}
+
+	// 检查文件大小
+	if fileInfo.Size() > maxFileSize {
+		fyne.LogError("文件过大", err)
+		return
+	}
+
+	// 检查路径是否为空
+	if currentFilePath == "" {
+		fyne.LogError("路径为空", err)
 		return
 	}
 
@@ -273,7 +278,7 @@ func main() {
 		"Light": theme.LightTheme(),
 	}
 
-	myWindow := myApp.NewWindow("Client")
+	myWindow = myApp.NewWindow("Client")
 	myWindow.Resize(fyne.NewSize(1024, 768))
 
 	// 创建一个按钮，当用户点击按钮时，显示一个包含主题选择器的对话框
@@ -743,127 +748,65 @@ func main() {
 				// 当 taskStatus 为 "1" 时，执行运行代码
 				if taskStatus == "1" {
 
-					updateTime, err := rdb.HGet(ctx, uuidStr, "updateTime").Result()
-					if err != nil {
-						fmt.Println("failed to get updateTime:", err)
-					}
-					submitTime, err := rdb.HGet(ctx, uuidStr, "submitTime").Result()
-					if err != nil {
-						fmt.Println("failed to get submitTime:", err)
-					}
-					//计算时间差
-					updateTimeObj, err := time.Parse("2006-01-02 15:04:05", updateTime)
-					if err != nil {
-						fmt.Println("failed to parse updateTime:", err)
-					}
-					submitTimeObj, err := time.Parse("2006-01-02 15:04:05", submitTime)
-					if err != nil {
-						fmt.Println("failed to parse submitTime:", err)
-					}
-					duration := updateTimeObj.Sub(submitTimeObj)
-
-					if duration.Seconds() == 0 {
-
-						if isBdfs {
-							err = fs.Download(uuidStr, "/", "./")
-							if err != nil {
-								fmt.Println("failed to download file:", err)
-							}
-						} else {
-							downPath := globalProject + ".zip"
-							downFile := filepath.Base(downPath)
-							err = s3.Download(uuidStr, downFile, ".")
-							if err != nil {
-								fmt.Println("failed to download file:", err)
-							}
-						}
-
-						err = filepath.Walk(currentDir, func(path string, info os.FileInfo, err error) error {
-							if err != nil {
-								return err
-							}
-							if !info.IsDir() && strings.HasSuffix(info.Name(), ".zip") {
-								// 使用完整路径解压文件
-								err = fs.Unzip(path, currentDir)
-								if err != nil {
-									fmt.Println("failed to unzip file:", err)
-								}
-							}
-							return nil
-						})
+					if isBdfs {
+						err = fs.Download(uuidStr, uuidStr+".zip", currentDir)
 						if err != nil {
-							log.Fatal(err)
-						}
-
-						//删除本地uuidStr下的压缩包
-						err = os.RemoveAll(uuidStr)
-						if err != nil {
-							fmt.Println("failed to remove dir:", err)
+							fmt.Println("failed to download file:", err)
 						}
 					} else {
-						// 从redis获取changedFile
-						changedFileStr, err := rdb.HGet(ctx, uuidStr, "changedFile").Result()
+						downZip := uuidStr + ".zip"
+						err = s3.Download(uuidStr, downZip, currentDir)
 						if err != nil {
-							log.Fatal(err)
-						}
-						// string changedFileStr to []sting
-						changedFile := strings.Split(changedFileStr, ", ")
-						// 如果changedFile不是空的则下载文件到当前目录
-						if len(changedFile) != 0 {
-							// 使用 range 关键字遍历字符串切片
-							for _, filename := range changedFile {
-								//这里是路径，只想要文件名称
-								filename = filepath.Base(filename)
-								fmt.Println("filenaems", filename)
-								if filename != "." {
-									if isBdfs {
-										err := fs.Download(uuidStr, filename, "./")
-										if err != nil {
-											fmt.Println(err)
-										}
-									} else {
-										err := s3.Download(uuidStr, filename, ".")
-										if err != nil {
-											fmt.Println(err)
-										}
-									}
-
-								}
-							}
+							fmt.Println("failed to download file:", err)
 						}
 					}
 
-					// 创建一个新的可以关闭的通道
-					exequit = make(chan bool)
+					// 解压uuidStr.zip 到uuidStr文件夹下
+					err = fs.Unzip(uuidStr+".zip", path.Join(currentDir, uuidStr))
+					if err != nil {
+						fmt.Println("failed to unzip file:", err)
+					}
 
-					exechangedFile = []string{}
+					//删除本地uuidStr下的压缩包
+					// err = os.RemoveAll(uuidStr + ".zip")
+					// if err != nil {
+					// 	fmt.Println("failed to remove dir:", err)
+					// }
 
-					// 在一个新的 goroutine 中开始监听路径下的文件变化
-					go ListenFsNotify(currentDir, &exechangedFile, exequit)
+					exeDir := path.Join(currentDir, uuidStr)
+					//转linux格式
+					exeDir = strings.Replace(exeDir, "\\", "/", -1)
+					utils.ExecCommand(selectedValue, bottomInput, bottomPart, exeDir, uuidStr, rdb, ExeCtx, ExeCancel)
 
-					utils.ExecCommand(selectedValue, bottomInput, bottomPart, currentDir, uuidStr, rdb, ExeCtx, ExeCancel)
-
-					// 如果changedFile不是空的话
-					if len(exechangedFile) != 0 {
-						for _, filename := range exechangedFile {
-							fmt.Println("exeFilepath", filename)
-							if isBdfs {
-								err = fs.Upload(filename, uuidStr)
-								if err != nil {
-									fmt.Println("failed to upload file:", err)
-								}
-							} else {
-								filename = filepath.Base(filename)
-								err = s3.Upload(filename, uuidStr)
-								if err != nil {
-									fmt.Println("failed to upload file:", err)
-								}
-							}
+					// 执行完毕后，压缩文件夹，上传文件夹，删除本地文件夹
+					// 压缩文件夹
+					fs.Zipit(exeDir, uuidStr+".zip")
+					if isBdfs {
+						// 上传文件夹
+						err = fs.Upload(uuidStr+".zip", uuidStr)
+						if err != nil {
+							fmt.Println("failed to upload file:", err)
+						}
+					} else {
+						//
+						err = s3.Uploadzip(uuidStr+".zip", uuidStr)
+						if err != nil {
+							fmt.Println("failed to upload file:", err)
 						}
 					}
-					exechangedFileStr := strings.Join(exechangedFile, ", ")
+					// 删除本地压缩文件
+					err = os.Remove(uuidStr + ".zip")
+					if err != nil {
+						fmt.Println("failed to remove file:", err)
+					}
+					// 删除本地文件夹
+					err = os.RemoveAll(uuidStr)
+					if err != nil {
+						fmt.Println("failed to remove dir:", err)
+					}
+
 					//将taskStatus置为0
-					err = rdb.HSet(ctx, uuidStr, "taskStatus", "0", "changedFile", exechangedFileStr, "updateTime", time.Now().Format("2006-01-02 15:04:05")).Err()
+					err = rdb.HSet(ctx, uuidStr, "taskStatus", "0", "updateTime", time.Now().Format("2006-01-02 15:04:05")).Err()
 					if err != nil {
 						fmt.Println("failed to set taskStatus:", err)
 					}
@@ -1011,95 +954,66 @@ func main() {
 						bottomPart.SetText("")
 						submitTime, err := rdb.HGet(ctx, uuidStr, "submitTime").Result()
 						fmt.Println("submitTime", submitTime)
-						if submitTime == "" {
-							if isBdfs {
-								err = fs.DeleteDir(uuidStr)
-								if err != nil {
-									fmt.Println("failed to delete dir:", err)
-								}
-							} else {
-								err = s3.DeleteDir(uuidStr)
-								if err != nil {
-									fmt.Println("failed to delete dir:", err)
-								}
-							}
-							bottomPart.SetText("清空网盘任务。。。")
-							// 压缩文件夹
-							fs.Zipit(globalProject, globalProject+".zip")
-							if isBdfs {
-								err = fs.CreateDir(uuidStr)
-								if err != nil {
-									fmt.Println("failed to create dir:", err)
-								}
-							} else {
-								err = s3.CreateDir(uuidStr)
-								if err != nil {
-									fmt.Println("failed to create dir:", err)
-								}
-							}
-							bottomPart.SetText("压缩文件夹。。。")
 
-							if isBdfs {
-								// 上传文件夹
-								err = fs.Upload(globalProject+".zip", uuidStr)
-								if err != nil {
-									fmt.Println("failed to upload file:", err)
-								}
-							} else {
-								//
-								err = s3.Uploadzip(globalProject+".zip", uuidStr)
-								if err != nil {
-									fmt.Println("failed to upload file:", err)
-								}
-							}
-							bottomPart.SetText("上传文件夹。。。")
-							// 删除本地压缩文件
-							err = os.Remove(globalProject + ".zip")
+						if isBdfs {
+							err = fs.DeleteDir(uuidStr)
 							if err != nil {
-								fmt.Println("failed to remove file:", err)
+								fmt.Println("failed to delete dir:", err)
 							}
-							// 更新redis uuid 下的任务状态为有任务需要执行，并将提交时间更新为当前时间
-							err = rdb.HSet(ctx, uuidStr, "cmd", bottomInput.Text, "taskStatus", "1", "log", "", "updateTime", time.Now().Format("2006-01-02 15:04:05"), "submitTime", time.Now().Format("2006-01-02 15:04:05")).Err()
-							if err != nil {
-								fmt.Println("failed to set info to redis :", err)
-							}
-							bottomPart.SetText("任务已创建")
 						} else {
-							fmt.Println("changedFile", changedFile)
-
-							// 如果changedFile不是空的话
-							if len(changedFile) != 0 {
-								for _, filename := range changedFile {
-									upfilePath := filepath.Join(globalProject, filename)
-									fmt.Println("upfilePath", upfilePath)
-									if isBdfs {
-										err = fs.Upload(upfilePath, uuidStr)
-										if err != nil {
-											fmt.Println("failed to upload file:", err)
-										}
-									} else {
-										fmt.Println("============================filename", filename)
-										localFilePath := filepath.Join(globalProject, filename)
-										err = s3.Uploadzip(localFilePath, uuidStr)
-										if err != nil {
-											fmt.Println("failed to upload file:", err)
-										}
-									}
-								}
-
-							}
-							//changedFile []string to string
-							changedFileStr := strings.Join(changedFile, ", ")
-
-							// 更新redis uuid 下的任务状态为有任务需要执行，并将提交时间更新为当前时间，cmd更新为bottomInput.Text
-							err = rdb.HSet(ctx, uuidStr, "cmd", bottomInput.Text, "changedFile", changedFileStr, "taskStatus", "1", "updateTime", time.Now().Format("2006-01-02 15:04:05")).Err()
+							err = s3.DeleteDir(uuidStr)
 							if err != nil {
-								fmt.Println("failed to set info to redis :", err)
+								fmt.Println("failed to delete dir:", err)
 							}
-
-							bottomPart.SetText("任务再次创建")
-
 						}
+						bottomPart.SetText("清空网盘任务。。。")
+						// 压缩文件夹
+						fs.Zipit(globalProject, globalProject+".zip")
+						if isBdfs {
+							err = fs.CreateDir(uuidStr)
+							if err != nil {
+								fmt.Println("failed to create dir:", err)
+							}
+						} else {
+							err = s3.CreateDir(uuidStr)
+							if err != nil {
+								fmt.Println("failed to create dir:", err)
+							}
+						}
+						bottomPart.SetText("压缩文件夹。。。")
+						// rename zip
+						uuidZip := filepath.Join(filepath.Dir(globalProject+".zip"), uuidStr+".zip")
+						err = os.Rename(globalProject+".zip", uuidZip)
+						if err != nil {
+							fmt.Println("failed to rename file:", err)
+						}
+
+						if isBdfs {
+							// 上传文件夹
+							err = fs.Upload(uuidZip, uuidStr)
+							if err != nil {
+								fmt.Println("failed to upload file:", err)
+							}
+						} else {
+							//
+							err = s3.Uploadzip(uuidZip, uuidStr)
+							if err != nil {
+								fmt.Println("failed to upload file:", err)
+							}
+						}
+						bottomPart.SetText("上传文件夹。。。")
+						// 删除本地压缩文件
+						err = os.Remove(uuidZip)
+						if err != nil {
+							fmt.Println("failed to remove file:", err)
+						}
+						// 更新redis uuid 下的任务状态为有任务需要执行，并将提交时间更新为当前时间
+						err = rdb.HSet(ctx, uuidStr, "cmd", bottomInput.Text, "taskStatus", "1", "log", "", "updateTime", time.Now().Format("2006-01-02 15:04:05"), "submitTime", time.Now().Format("2006-01-02 15:04:05")).Err()
+						if err != nil {
+							fmt.Println("failed to set info to redis :", err)
+						}
+						bottomPart.SetText("任务已创建")
+
 						//不停的轮询redis uuid 下的任务状态，如果为0，则下载文件夹
 						for {
 							// 获取任务状态
@@ -1125,38 +1039,27 @@ func main() {
 							}
 							if status == "0" {
 
-								changedFileStr, err := rdb.HGet(ctx, uuidStr, "changedFile").Result()
-								if err != nil {
-									fmt.Println(err)
-								}
-								// string changedFileStr to []sting
-								changedFile := strings.Split(changedFileStr, ", ")
-								// 如果changedFile不是空的则下载文件到当前目录
-								if len(changedFile) != 0 {
-									// 使用 range 关键字遍历字符串切片
-									for _, filename := range changedFile {
-										//split filename,最后一个/后面的就是文件名
-										filename = filepath.Base(filename)
-										fmt.Println("filenaem", filename)
-										if filename != "." {
-											if isBdfs {
-												err := fs.Download(uuidStr, filename, globalProject)
-												if err != nil {
-													fmt.Println(err)
-												}
-											} else {
-												err := s3.Download(uuidStr, filename, globalProject)
-												if err != nil {
-													fmt.Println(err)
-												}
-											}
-
-										}
+								//download
+								if isBdfs {
+									err = fs.Download(uuidStr, uuidStr+".zip", globalProject)
+									if err != nil {
+										fmt.Println("failed to download file:", err)
+									}
+								} else {
+									err = s3.Download(uuidStr, uuidStr+".zip", globalProject)
+									if err != nil {
+										fmt.Println("failed to download file:", err)
 									}
 								}
 
+								// 解压uuidStr.zip 到uuidStr文件夹下
+								err = fs.Unzip(globalProject+"/"+uuidStr+".zip", globalProject)
+								if err != nil {
+									fmt.Println("failed to unzip file:", err)
+								}
+
 								//删除本地uuidStr下的压缩包
-								err = os.RemoveAll(globalProject + "/" + uuidStr)
+								err = os.RemoveAll(globalProject + "/" + uuidStr + ".zip")
 								if err != nil {
 									fmt.Println("failed to remove dir:", err)
 								}
@@ -1277,18 +1180,6 @@ func main() {
 
 		})
 
-		// 如果 quit 通道已经存在，关闭它以停止旧的文件监听
-		if quit != nil {
-			close(quit)
-		}
-
-		// 创建一个新的可以关闭的通道
-		quit = make(chan bool)
-
-		changedFile = []string{}
-		// 在一个新的 goroutine 中开始监听路径下的文件变化
-		go ListenFsNotify(globalProject, &changedFile, quit)
-
 		githubImportButton := widget.NewButton("GitHub 导入", func() {
 			// 在这里添加导入 GitHub 代码的代码
 		})
@@ -1368,15 +1259,17 @@ func main() {
 	myWindow.SetContent(mainSplit)
 	// 这里想关闭窗口时，将redis中的status置为0
 	myWindow.SetOnClosed(func() {
+		cancelTask()
 		// 更新Redis数据,status置为0
 		ctx := context.Background()
-		fmt.Println("Closing window, setting status to 0 for", uuidStr)
+		fmt.Println("Current status:", rdb.HGet(ctx, uuidStr, "status").Val())
 		err := rdb.HSet(ctx, uuidStr, "status", "0").Err()
 		if err != nil {
 			fmt.Println("Error setting status to 0:", err)
 		} else {
 			fmt.Println("Successfully set status to 0")
 		}
+		fmt.Println("New status:", rdb.HGet(ctx, uuidStr, "status").Val())
 	})
 
 	myWindow.ShowAndRun()

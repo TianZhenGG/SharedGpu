@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sharedgpu/utils"
@@ -68,16 +69,14 @@ func ClearFiles(currentDir string) error {
 
 func Upload(localFile, remoteDir string) error {
 	// 上传文件
-
-	remoteFile := remoteDir + "/" + localFile
+	remoteFile := path.Join(remoteDir, filepath.Base(localFile))
 	err := bucket.PutObjectFromFile(remoteFile, localFile)
 	return err
 }
 
 func Uploadzip(localFile, remoteDir string) error {
-	// 上传文件
 
-	remoteFile := remoteDir + "/" + filepath.Base(localFile)
+	remoteFile := path.Join(remoteDir, filepath.Base(localFile))
 	err := bucket.PutObjectFromFile(remoteFile, localFile)
 	if err != nil {
 		fmt.Println("Error:", err)
@@ -95,24 +94,22 @@ func Uploadzip(localFile, remoteDir string) error {
 
 func CreateDir(remoteDir string) error {
 	// 创建目录
-	err := bucket.PutObject(remoteDir+"/", nil)
+	err := bucket.PutObject(remoteDir, nil)
 	return err
 }
 
 func DeleteDir(remoteDir string) error {
 	// 删除目录
-	err := bucket.DeleteObject(remoteDir + "/")
+	err := bucket.DeleteObject(remoteDir)
 	return err
 }
 
 func Download(remoteDir, remoteFile string, savepath string) error {
-	localFile := savepath + "/" + remoteFile
-
-	remoteFile = remoteDir + "/" + remoteFile
+	localFile := path.Join(savepath, remoteFile)
+	remoteFile = path.Join(remoteDir, remoteFile)
 	fmt.Println("remoteFile:", remoteFile)
 	fmt.Println("localFile:", localFile)
 	err := bucket.GetObjectToFile(remoteFile, localFile)
-	_ = ClearFiles(savepath)
 	return err
 }
 
