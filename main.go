@@ -947,6 +947,7 @@ func main() {
 					if selectedValue == "local" {
 						fmt.Println("local")
 						utils.ExecCommand(selectedValue, bottomInput, bottomPart, globalProject, uuidStr, rdb, ExeCtx, ExeCancel)
+						return
 					} else {
 						// 查看redis是不是有创建过任务，submitTime字段
 						// 查询 submitTime 字段

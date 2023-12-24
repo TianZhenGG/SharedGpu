@@ -1,13 +1,15 @@
 package s3
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/base64"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
-	"sharedgpu/utils"
 	"strings"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
@@ -18,18 +20,33 @@ var accessKeyId = "rpWD9Uf7uioDitP/SKkKHnPVd8jN/qvy"
 var secretKeyId = "0YaKyivs0yp9rr6ldaA9My7dy/79q75YyLoZsDmm"
 var bucket *oss.Bucket
 
+func DecryptAES(key, ciphertext string) (string, error) {
+	block, err := aes.NewCipher([]byte(key))
+	if err != nil {
+		return "", err
+	}
+
+	decodedCiphertext, _ := base64.StdEncoding.DecodeString(ciphertext)
+
+	plaintext := make([]byte, len(decodedCiphertext))
+	stream := cipher.NewCFBDecrypter(block, []byte(key)[:block.BlockSize()])
+	stream.XORKeyStream(plaintext, decodedCiphertext)
+
+	return string(plaintext), nil
+}
+
 func init() {
-	endpoint, err := utils.DecryptAES("the-key-has-to-be-32-bytes-long!", endpoint)
+	endpoint, err := DecryptAES("the-key-has-to-be-32-bytes-long!", endpoint)
 	if err != nil {
 		fmt.Println("Error:", err)
 	}
 
-	accessKeyId, err := utils.DecryptAES("the-key-has-to-be-32-bytes-long!", accessKeyId)
+	accessKeyId, err := DecryptAES("the-key-has-to-be-32-bytes-long!", accessKeyId)
 	if err != nil {
 		fmt.Println("Error:", err)
 	}
 
-	secretKeyId, err := utils.DecryptAES("the-key-has-to-be-32-bytes-long!", secretKeyId)
+	secretKeyId, err := DecryptAES("the-key-has-to-be-32-bytes-long!", secretKeyId)
 	if err != nil {
 		fmt.Println("Error:", err)
 	}

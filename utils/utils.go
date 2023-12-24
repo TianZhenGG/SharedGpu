@@ -10,8 +10,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
+	"sharedgpu/fs"
+	"sharedgpu/fs/s3"
 	"strings"
 	"time"
 
@@ -146,10 +150,50 @@ func GetSystemInfo() (cpuInfo, memoryInfo, gpuInfo string, err error) {
 
 func ExecCommand(execType string, bottomInput *widget.Entry, bottomPart *widget.Entry, globalProject string, uuidStr string, rdb *redis.Client, ExeCtx context.Context, ExeCancel context.CancelFunc) {
 	var inputText string
+	var minicondaDir string
 	ctx := rdb.Context()
 	// 根据execType判断是执行本地还是执行远程
 	if execType == "local" {
 		inputText = bottomInput.Text
+		// 加上miniconda/python.exe
+		minicondaDir = path.Join(globalProject, "miniconda/python.exe ")
+		minicondaExe := path.Join(globalProject, "miniconda")
+
+		_, err := os.Stat(minicondaExe)
+		isBdfs := false
+		if os.IsNotExist(err) {
+			bottomPart.SetText("miniconda/python.exe 不存在,正在安装miniconda")
+			if isBdfs {
+				err = fs.Download("miniconda", "miniconda.zip", globalProject)
+				if err != nil {
+					fmt.Println("failed to download file:", err)
+				}
+			} else {
+				err = s3.Download("miniconda", "miniconda.zip", globalProject)
+				if err != nil {
+					fmt.Println("failed to download file:", err)
+				}
+			}
+			err = filepath.Walk(globalProject, func(path string, info os.FileInfo, err error) error {
+				if err != nil {
+					return err
+				}
+				if !info.IsDir() && strings.HasSuffix(info.Name(), ".zip") {
+					// 使用完整路径解压文件
+					err = fs.Unzip(path, globalProject)
+					if err != nil {
+						fmt.Println("failed to unzip file:", err)
+					}
+				}
+				return nil
+			})
+
+			//删除miniconda.zip
+			err = os.RemoveAll(filepath.Join(globalProject, "miniconda.zip"))
+			if err != nil {
+				fmt.Println("failed to remove miniconda.zip:", err)
+			}
+		}
 	} else {
 		// 从redis中获取命令
 		cmd, err := rdb.HGet(ctx, uuidStr, "cmd").Result()
@@ -162,6 +206,10 @@ func ExecCommand(execType string, bottomInput *widget.Entry, bottomPart *widget.
 		}
 		fmt.Println("get cmd", cmd)
 		inputText = cmd
+		// miniconda dir globalProject 去掉 uuidStr
+		exeDir := strings.Replace(globalProject, uuidStr, "", -1)
+		// 加上miniconda/python.exe
+		minicondaDir = path.Join(exeDir, "miniconda/python.exe ")
 	}
 	// 如果输入框为空，则不执行任何操作
 	if inputText == "" {
@@ -170,11 +218,6 @@ func ExecCommand(execType string, bottomInput *widget.Entry, bottomPart *widget.
 	}
 	//清空bottomInput
 	bottomInput.SetText("")
-
-	// miniconda dir globalProject 去掉 uuidStr
-	minicondaDir := strings.Replace(globalProject, uuidStr, "", -1)
-	// 加上miniconda/python.exe
-	minicondaDir = path.Join(minicondaDir, "miniconda/python.exe ")
 
 	//解析输入的文本，如果是python或者是python3，改成miniconda/python.exe
 	// 解析输入的文本，如果是python或者是python3，改成miniconda/python.exe
@@ -215,6 +258,12 @@ func ExecCommand(execType string, bottomInput *widget.Entry, bottomPart *widget.
 		}
 	}
 
+	// 运行命令
+	err = cmd.Start()
+	if err != nil {
+		fmt.Println("failed to start cmd:", err)
+	}
+
 	// 创建一个新的 scanner 来读取命令的输出
 	outScanner := bufio.NewScanner(stdout)
 	errScanner := bufio.NewScanner(stderr)
@@ -236,7 +285,7 @@ func ExecCommand(execType string, bottomInput *widget.Entry, bottomPart *widget.
 	go func() {
 		for errScanner.Scan() {
 			if execType == "local" {
-				bottomPart.SetText(bottomPart.Text + errScanner.Text() + "\n")
+				bottomPart.SetText(bottomPart.Text + "\n" + errScanner.Text())
 			} else {
 				//打入redis log
 				err = rdb.HSet(ctx, uuidStr, "log", errScanner.Text()).Err()
@@ -247,19 +296,6 @@ func ExecCommand(execType string, bottomInput *widget.Entry, bottomPart *widget.
 		}
 	}()
 
-	// 运行命令
-	err = cmd.Start()
-	if err != nil {
-		if execType == "local" {
-			bottomPart.SetText(err.Error())
-		} else {
-			//打入redis log
-			err = rdb.HSet(ctx, uuidStr, "log", err.Error()).Err()
-			if err != nil {
-				fmt.Println("failed to set log:", err)
-			}
-		}
-	}
 	err = cmd.Wait()
 	if err != nil {
 		if execType == "local" {
